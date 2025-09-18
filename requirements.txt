@@ -1,0 +1,25 @@
+# Core RL and ML libraries
+stable-baselines3[extra]==2.1.0
+torch>=2.0.0
+
+# DirectML for AMD GPU (install separately if needed)
+# torch-directml  # Uncomment if you have AMD GPU
+
+# Computer vision and screen capture
+opencv-python>=4.8.0
+mss>=9.0.1
+numpy>=1.24.0
+
+# Input simulation
+pydirectinput>=1.0.4
+
+# Environment and utilities
+gymnasium>=0.28.0
+matplotlib>=3.7.0
+
+# Logging and monitoring
+tensorboard>=2.13.0
+
+# Development and debugging
+pytest>=7.4.0  # For testing
+black>=23.0.0  # Code formatting
