@@ -1,25 +1,51 @@
+# Enhanced Osu! Mania RL Agent Requirements
 # Core RL and ML libraries
 stable-baselines3[extra]==2.1.0
 torch>=2.0.0
+gymnasium>=0.28.0
 
-# DirectML for AMD GPU (install separately if needed)
-# torch-directml  # Uncomment if you have AMD GPU
+# DirectML for AMD GPU support (optional)
+torch-directml  # Uncomment if you have AMD GPU and want DirectML support
 
-# Computer vision and screen capture
+# Computer Vision and Screen Capture
 opencv-python>=4.8.0
 mss>=9.0.1
 numpy>=1.24.0
 
-# Input simulation
+# OCR for reading game state
+easyocr>=1.7.0
+
+# Input Simulation
 pydirectinput>=1.0.4
 
-# Environment and utilities
-gymnasium>=0.28.0
+# Data Processing and Analysis
+pandas>=2.0.0
 matplotlib>=3.7.0
+seaborn>=0.12.0
 
-# Logging and monitoring
+# Logging and Monitoring
 tensorboard>=2.13.0
+wandb>=0.15.0  # Optional: for advanced experiment tracking
 
-# Development and debugging
-pytest>=7.4.0  # For testing
+# Utilities
+tqdm>=4.65.0  # Progress bars
+psutil>=5.9.0  # System monitoring
+Pillow>=10.0.0  # Image processing
+
+# Development and Testing
+pytest>=7.4.0
 black>=23.0.0  # Code formatting
+flake8>=6.0.0  # Code linting
+
+# Optional: Advanced features
+pytesseract>=0.3.10  # Alternative OCR engine
+# keyboard>=0.13.5     # Alternative input handling
+# playsound>=1.3.0     # Audio feedback during training
+
+# Performance optimization (optional)
+numba>=0.58.0        # JIT compilation for speed
+# cupy-cuda12x>=12.0.0 # GPU-accelerated NumPy (for NVIDIA)
+
+# GUI and Visualization (optional)
+# tkinter  # Usually comes with Python
+# PyQt6>=6.5.0  # Advanced GUI framework

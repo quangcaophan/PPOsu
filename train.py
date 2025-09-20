@@ -1,32 +1,68 @@
+"""
+Enhanced Training Script for Osu! Mania RL Agent
+Features:
+- Automatic configuration loading
+- OCR-based reward system  
+- Long note support
+- Advanced monitoring and callbacks
+- Performance optimization
+"""
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
+
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.logger import configure
+from stable_baselines3.common.env_util import make_vec_env
 import torch
 import time
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import deque
 import cv2
-import os
 
-# Import your improved environment
-from improved_game_env import OsuManiaEnv
+import json
+import warnings
+from typing import Dict, Any, Optional
 
-# Configuration
-PLAY_AREA = {'top': 230, 'left': 710, 'width': 490, 'height': 750}
-NUM_KEYS = 4
+# Try to import DirectML for AMD GPUs
+try:
+    import torch_directml
+    DIRECTML_AVAILABLE = True
+except ImportError:
+    DIRECTML_AVAILABLE = False
+    print("DirectML not available. Using CUDA/CPU.")
 
-class OsuTrainingCallback(BaseCallback):
-    """Custom callback for monitoring training progress"""
+# Import our enhanced environment
+from improved_game_env import ImprovedOsuManiaEnv
+
+class EnhancedTrainingCallback(BaseCallback):
+    """Advanced callback for monitoring training progress with OCR metrics"""
     
-    def __init__(self, verbose=0):
+    def __init__(self, verbose=0, save_freq=10000):
         super().__init__(verbose)
+        self.save_freq = save_freq
+        
+        # Episode tracking
         self.episode_rewards = deque(maxlen=100)
         self.episode_lengths = deque(maxlen=100)
+        self.episode_accuracies = deque(maxlen=100)
+        self.episode_combos = deque(maxlen=100)
+        
+        # Performance tracking
         self.best_reward = -float('inf')
+        self.best_accuracy = 0.0
+        self.best_combo = 0
+        
+        # Training metrics
+        self.total_steps = 0
+        self.start_time = time.time()
         
     def _on_step(self) -> bool:
-        # Log episode statistics
+        self.total_steps += 1
+        
+        # Log episode statistics when available
         if len(self.locals.get('infos', [])) > 0:
             info = self.locals['infos'][0]
             
@@ -37,179 +73,473 @@ class OsuTrainingCallback(BaseCallback):
                 self.episode_rewards.append(episode_reward)
                 self.episode_lengths.append(episode_length)
                 
-                # Log to tensorboard
+                # Extract osu-specific metrics from the last step
+                current_info = self.locals.get('infos', [{}])[0]
+                accuracy = current_info.get('accuracy', 0) * 100
+                max_combo = current_info.get('current_combo', 0)
+                
+                self.episode_accuracies.append(accuracy)
+                self.episode_combos.append(max_combo)
+                
+                # Log to tensorboard/logger
                 self.logger.record('episode/reward', episode_reward)
                 self.logger.record('episode/length', episode_length)
-                self.logger.record('episode/reward_mean_100', np.mean(self.episode_rewards))
+                self.logger.record('episode/accuracy', accuracy)
+                self.logger.record('episode/max_combo', max_combo)
                 
-                # Save best model
+                # Rolling averages
+                if len(self.episode_rewards) >= 10:
+                    self.logger.record('episode/reward_mean_10', np.mean(list(self.episode_rewards)[-10:]))
+                    self.logger.record('episode/accuracy_mean_10', np.mean(list(self.episode_accuracies)[-10:]))
+                    self.logger.record('episode/combo_mean_10', np.mean(list(self.episode_combos)[-10:]))
+                
+                if len(self.episode_rewards) >= 100:
+                    self.logger.record('episode/reward_mean_100', np.mean(self.episode_rewards))
+                    self.logger.record('episode/accuracy_mean_100', np.mean(self.episode_accuracies))
+                    self.logger.record('episode/combo_mean_100', np.mean(self.episode_combos))
+                
+                # Check for new records
                 if episode_reward > self.best_reward:
                     self.best_reward = episode_reward
-                    self.model.save("models/best_osu_model")
-                    print(f"New best reward: {episode_reward:.2f}")
+                    self.model.save("models/best_reward_model")
+                    print(f"🏆 New best reward: {episode_reward:.2f}")
+                
+                if accuracy > self.best_accuracy:
+                    self.best_accuracy = accuracy
+                    self.model.save("models/best_accuracy_model")
+                    print(f"🎯 New best accuracy: {accuracy:.1f}%")
+                
+                if max_combo > self.best_combo:
+                    self.best_combo = max_combo
+                    self.model.save("models/best_combo_model")
+                    print(f"🔥 New best combo: {max_combo}")
+                
+                # Detailed episode summary
+                elapsed = time.time() - self.start_time
+                print(f"Episode completed | Reward: {episode_reward:6.1f} | "
+                      f"Accuracy: {accuracy:5.1f}% | Combo: {max_combo:3d} | "
+                      f"Length: {episode_length:4d} | Time: {elapsed/60:.1f}m")
+        
+        # Log training progress every save_freq steps
+        if self.total_steps % self.save_freq == 0:
+            elapsed = time.time() - self.start_time
+            steps_per_sec = self.total_steps / elapsed
+            
+            self.logger.record('training/steps_per_second', steps_per_sec)
+            self.logger.record('training/elapsed_minutes', elapsed / 60)
+            
+            print(f"Training progress: {self.total_steps:,} steps | "
+                  f"{steps_per_sec:.1f} steps/sec | "
+                  f"{elapsed/60:.1f} minutes elapsed")
         
         return True
 
-def test_agent(model, env, num_episodes=3):
-    """Test the trained agent and visualize performance"""
-    print("\n=== Testing Trained Agent ===")
+class EvaluationCallback(BaseCallback):
+    """Callback for periodic evaluation during training"""
     
-    total_rewards = []
-    
-    for episode in range(num_episodes):
-        obs, info = env.reset()
-        episode_reward = 0
-        step_count = 0
+    def __init__(self, eval_env, eval_freq=50000, n_eval_episodes=3, verbose=1):
+        super().__init__(verbose)
+        self.eval_env = eval_env
+        self.eval_freq = eval_freq
+        self.n_eval_episodes = n_eval_episodes
+        self.best_mean_reward = -float('inf')
         
-        print(f"\nEpisode {episode + 1}")
-        print("Starting in 5 seconds... Make sure osu! is ready!")
-        time.sleep(5)
-        
-        done = False
-        while not done and step_count < 1000:  # Limit test episodes
-            action, _states = model.predict(obs, deterministic=True)
-            obs, reward, done, truncated, info = env.step(action)
+    def _on_step(self) -> bool:
+        if self.n_calls % self.eval_freq == 0:
+            print(f"\n🧪 Running evaluation at step {self.n_calls}...")
             
-            episode_reward += reward
-            step_count += 1
+            episode_rewards = []
+            episode_accuracies = []
+            episode_combos = []
             
-            # Print progress every 100 steps
-            if step_count % 100 == 0:
-                activity_score = info.get('activity_score', 0)
-                keys_pressed = info.get('keys_pressed', [])
-                print(f"Step {step_count}: Reward={reward:.2f}, Activity={activity_score:.3f}, Keys={keys_pressed}")
+            for i in range(self.n_eval_episodes):
+                print(f"Evaluation episode {i+1}/{self.n_eval_episodes}")
+                
+                obs, info = self.eval_env.reset()
+                episode_reward = 0
+                done = False
+                step_count = 0
+                max_steps = 2000  # Limit eval episodes
+                
+                while not done and step_count < max_steps:
+                    action, _ = self.model.predict(obs, deterministic=True)
+                    obs, reward, done, truncated, info = self.eval_env.step(action)
+                    episode_reward += reward
+                    step_count += 1
+                
+                accuracy = info.get('accuracy', 0) * 100
+                combo = info.get('current_combo', 0)
+                
+                episode_rewards.append(episode_reward)
+                episode_accuracies.append(accuracy)
+                episode_combos.append(combo)
+                
+                print(f"  Episode {i+1}: Reward={episode_reward:.1f}, "
+                      f"Accuracy={accuracy:.1f}%, Combo={combo}")
+            
+            mean_reward = np.mean(episode_rewards)
+            mean_accuracy = np.mean(episode_accuracies)
+            mean_combo = np.mean(episode_combos)
+            
+            # Log evaluation results
+            self.logger.record('eval/mean_reward', mean_reward)
+            self.logger.record('eval/mean_accuracy', mean_accuracy)
+            self.logger.record('eval/mean_combo', mean_combo)
+            
+            print(f"📊 Evaluation results:")
+            print(f"   Mean Reward: {mean_reward:.1f}")
+            print(f"   Mean Accuracy: {mean_accuracy:.1f}%") 
+            print(f"   Mean Combo: {mean_combo:.0f}")
+            
+            # Save best evaluation model
+            if mean_reward > self.best_mean_reward:
+                self.best_mean_reward = mean_reward
+                self.model.save("models/best_eval_model")
+                print(f"💾 New best evaluation model saved (reward: {mean_reward:.1f})")
         
-        total_rewards.append(episode_reward)
-        print(f"Episode {episode + 1} finished: Total Reward = {episode_reward:.2f}, Steps = {step_count}")
-    
-    avg_reward = np.mean(total_rewards)
-    print(f"\nAverage reward over {num_episodes} episodes: {avg_reward:.2f}")
-    return avg_reward
+        return True
 
-def setup_training_environment():
-    """Setup directories and logging"""
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("logs", exist_ok=True)
-    os.makedirs("tensorboard_logs", exist_ok=True)
-    
-    # Setup custom logger
-    new_logger = configure("logs/", ["stdout", "csv", "tensorboard"])
-    return new_logger
+def load_config() -> Dict[str, Any]:
+    """Load configuration from JSON file"""
+    config_file = "osu_config.json"
+    try:
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+        print(f"✅ Configuration loaded from {config_file}")
+        return config
+    except FileNotFoundError:
+        print(f"❌ Configuration file {config_file} not found!")
+        print("Please run the setup tool first: python enhanced_setup_tool.py")
+        return None
+    except json.JSONDecodeError:
+        print(f"❌ Invalid JSON in {config_file}")
+        return None
 
-def main():
-    print("=== Osu! Mania RL Training Script ===")
-    print("Please make sure osu! is open and ready!")
-    
-    # Check device
-    if torch.dml.is_available():
-        device = "dml"
-        print("Using DirectML (AMD GPU)")
+def setup_device() -> str:
+    """Setup and return the best available device"""
+    if DIRECTML_AVAILABLE and torch_directml.is_available():
+        device = torch_directml.device()
+        print("🔥 Using DirectML (AMD GPU acceleration)")
+        return device
     elif torch.cuda.is_available():
         device = "cuda"
-        print("Using CUDA (NVIDIA GPU)")
+        print(f"🚀 Using CUDA GPU: {torch.cuda.get_device_name()}")
+        return device
     else:
         device = "cpu"
-        print("Using CPU")
+        print("💻 Using CPU (consider getting a GPU for faster training)")
+        return device
+
+def setup_directories():
+    """Create necessary directories for training"""
+    directories = ["models", "logs", "tensorboard_logs", "checkpoints", "evaluation_logs"]
+    for directory in directories:
+        os.makedirs(directory, exist_ok=True)
+    print("📁 Training directories created")
+
+def create_model(env, device: str, config: Dict[str, Any]) -> PPO:
+    """Create PPO model with optimized hyperparameters for osu! mania"""
     
-    # Setup training environment
-    logger = setup_training_environment()
+    # Model configuration optimized for rhythm games
+    model_config = {
+        "policy": "CnnPolicy",
+        "env": env,
+        "verbose": 1,
+        "device": device,
+        
+        # Core hyperparameters optimized for osu!
+        "n_steps": 2048,  # Collect more experience before updates
+        "batch_size": 64,  # Smaller batches for stability
+        "n_epochs": 10,   # Multiple epochs per update
+        "learning_rate": 3e-4,  # Conservative learning rate
+        
+        # Advanced parameters
+        "gamma": 0.99,    # Discount factor - value future rewards highly
+        "gae_lambda": 0.95,  # GAE parameter for advantage estimation
+        "clip_range": 0.2,   # PPO clipping parameter
+        "clip_range_vf": None,  # No value function clipping
+        
+        # Regularization
+        "ent_coef": 0.01,    # Entropy coefficient for exploration
+        "vf_coef": 0.5,      # Value function coefficient
+        "max_grad_norm": 0.5,  # Gradient clipping
+        
+        # Logging
+        "tensorboard_log": "tensorboard_logs/",
+    }
     
-    # Create environment with visualization enabled
-    print("\nCreating environment...")
-    env = OsuManiaEnv(
-        play_area=PLAY_AREA, 
-        num_keys=NUM_KEYS, 
-        show_window=True  # Enable visualization
+    # Load existing model if available
+    latest_model_path = "models/latest_model.zip"
+    if os.path.exists(latest_model_path):
+        print(f"🔄 Loading existing model from {latest_model_path}")
+        try:
+            model = PPO.load(latest_model_path, env=env, device=device)
+            print("✅ Existing model loaded successfully")
+            return model
+        except Exception as e:
+            print(f"⚠️ Could not load existing model: {e}")
+            print("Creating new model instead...")
+    
+    print("🆕 Creating new PPO model...")
+    model = PPO(**model_config)
+    return model
+
+def train_agent(config: Dict[str, Any]):
+    """Main training function"""
+    
+    # Setup
+    device = setup_device()
+    setup_directories()
+    
+    # Create environment
+    print("🎮 Creating training environment...")
+    
+    # Extract areas from config
+    play_area = config.get('play_area')
+    if not play_area:
+        print("❌ Play area not found in config!")
+        return False
+    
+    env = ImprovedOsuManiaEnv(
+        play_area=play_area,
+        num_keys=4,
+        show_window=True,  # Show visualization during training
+        config_file="osu_config.json"
     )
     
-    # Check if we have a saved model to continue training
-    model_path = "models/latest_osu_model.zip"
-    if os.path.exists(model_path):
-        print(f"Loading existing model from {model_path}")
-        model = PPO.load(model_path, env=env, device=device)
-        model.set_logger(logger)
-    else:
-        print("Creating new model...")
-        # Create new model with optimized hyperparameters for osu!
-        model = PPO(
-            "CnnPolicy",
-            env,
-            verbose=1,
-            device=device,
-            # Optimized hyperparameters for rhythm game
-            n_steps=2048,
-            batch_size=64,
-            n_epochs=10,
-            learning_rate=3e-4,
-            gamma=0.99,
-            gae_lambda=0.95,
-            clip_range=0.2,
-            ent_coef=0.01,  # Encourage exploration
-            vf_coef=0.5,
-            max_grad_norm=0.5,
-            tensorboard_log="tensorboard_logs/",
-        )
-        model.set_logger(logger)
+    # Load result template if available
+    if os.path.exists("result_template.png"):
+        env.load_result_template("result_template.png")
+        print("📸 Result screen template loaded")
     
-    # Setup callback
-    callback = OsuTrainingCallback(verbose=1)
+    # Create evaluation environment (without visualization for speed)
+    print("📊 Creating evaluation environment...")
+    eval_env = ImprovedOsuManiaEnv(
+        play_area=play_area,
+        num_keys=4,
+        show_window=False,  # No visualization for evaluation
+        config_file="osu_config.json"
+    )
     
-    print("\nTraining will start in 10 seconds...")
-    print("Please:")
-    print("1. Make sure osu! mania is open")
-    print("2. Select a song (preferably an easier one for initial training)")
-    print("3. The AI will start learning to play!")
-    print("4. You can watch the visualization window to see what the AI sees")
+    # Create model
+    model = create_model(env, device, config)
+    
+    # Setup custom logger
+    logger = configure("logs/", ["stdout", "csv", "tensorboard"])
+    model.set_logger(logger)
+    
+    # Setup callbacks
+    callbacks = []
+    
+    # Main training callback
+    training_callback = EnhancedTrainingCallback(verbose=1, save_freq=10000)
+    callbacks.append(training_callback)
+    
+    # Checkpoint callback
+    checkpoint_callback = CheckpointCallback(
+        save_freq=25000,
+        save_path="checkpoints/",
+        name_prefix="osu_checkpoint"
+    )
+    callbacks.append(checkpoint_callback)
+    
+    # Evaluation callback
+    eval_callback = EvaluationCallback(
+        eval_env=eval_env,
+        eval_freq=50000,
+        n_eval_episodes=3,
+        verbose=1
+    )
+    callbacks.append(eval_callback)
+    
+    # Training configuration
+    total_timesteps = 1_000_000  # 1M steps for thorough training
+    save_interval = 100_000      # Save every 100k steps
+    
+    print(f"🚀 Starting training for {total_timesteps:,} timesteps")
+    print("Training will be saved automatically. You can stop anytime with Ctrl+C")
+    print("\nWait 10 seconds then start playing osu! mania...")
+    print("Tips for training:")
+    print("- Start with easier songs")
+    print("- Let it play multiple songs")
+    print("- Monitor the visualization window")
+    print("- Check tensorboard for detailed metrics")
     
     time.sleep(10)
     
     try:
-        # Training loop with periodic saves
-        total_timesteps = 500_000
-        save_interval = 50_000
-        
+        # Training loop with progressive saves
         for i in range(0, total_timesteps, save_interval):
             remaining_steps = min(save_interval, total_timesteps - i)
             
-            print(f"\nTraining steps {i} to {i + remaining_steps}")
+            print(f"\n{'='*60}")
+            print(f"🏃 Training segment: steps {i:,} to {i + remaining_steps:,}")
+            print(f"{'='*60}")
+            
+            # Train for this segment
             model.learn(
                 total_timesteps=remaining_steps,
-                callback=callback,
-                reset_num_timesteps=False,
-                progress_bar=True
+                callback=callbacks,
+                reset_num_timesteps=False,  # Keep step counter continuous
+                progress_bar=True,
+                tb_log_name="osu_training"
             )
             
-            # Save model periodically
-            model.save(f"models/osu_model_step_{i + remaining_steps}")
-            model.save("models/latest_osu_model")
-            print(f"Model saved at step {i + remaining_steps}")
+            # Save progress
+            model.save(f"models/model_step_{i + remaining_steps:06d}")
+            model.save("models/latest_model")
             
-            # Quick test run
-            if (i + remaining_steps) % (save_interval * 2) == 0:  # Test every 2 intervals
-                print("\nTesting current model...")
-                test_agent(model, env, num_episodes=1)
+            print(f"💾 Model saved at step {i + remaining_steps:,}")
+            
+            # Quick performance summary
+            if len(training_callback.episode_rewards) > 0:
+                recent_rewards = list(training_callback.episode_rewards)[-10:]
+                recent_accuracies = list(training_callback.episode_accuracies)[-10:]
+                
+                print(f"📈 Recent performance (last 10 episodes):")
+                print(f"   Average Reward: {np.mean(recent_rewards):.1f}")
+                print(f"   Average Accuracy: {np.mean(recent_accuracies):.1f}%")
+                print(f"   Best Records - Reward: {training_callback.best_reward:.1f}, "
+                      f"Accuracy: {training_callback.best_accuracy:.1f}%, "
+                      f"Combo: {training_callback.best_combo}")
     
     except KeyboardInterrupt:
-        print("\nTraining interrupted by user...")
-        model.save("models/interrupted_osu_model")
-        print("Model saved!")
+        print("\n⏹️ Training interrupted by user")
+        model.save("models/interrupted_model")
+        print("💾 Model saved as 'interrupted_model'")
     
     except Exception as e:
-        print(f"\nError during training: {e}")
-        model.save("models/error_backup_osu_model")
-        print("Backup model saved!")
+        print(f"\n❌ Error during training: {e}")
+        model.save("models/error_backup_model")
+        print("💾 Backup model saved")
+        raise
     
     finally:
-        # Final test
-        print("\nFinal testing...")
-        final_score = test_agent(model, env, num_episodes=3)
+        # Final save and cleanup
+        model.save("models/final_model")
+        print("💾 Final model saved")
         
-        # Save final model
-        model.save("models/final_osu_model")
-        print(f"\nTraining completed! Final average score: {final_score:.2f}")
-        print("Models saved in 'models/' directory")
+        # Final evaluation
+        print("\n🧪 Running final evaluation...")
+        try:
+            eval_callback._on_step()  # Trigger final evaluation
+        except:
+            print("Could not run final evaluation")
+        
+        # Cleanup
+        env.close()
+        eval_env.close()
+        
+        # Training summary
+        print(f"\n{'='*60}")
+        print("🏁 TRAINING COMPLETED!")
+        print(f"{'='*60}")
+        
+        if len(training_callback.episode_rewards) > 0:
+            print(f"📊 Final Statistics:")
+            print(f"   Total Episodes: {len(training_callback.episode_rewards)}")
+            print(f"   Best Reward: {training_callback.best_reward:.1f}")
+            print(f"   Best Accuracy: {training_callback.best_accuracy:.1f}%")
+            print(f"   Best Combo: {training_callback.best_combo}")
+            print(f"   Average Recent Reward: {np.mean(list(training_callback.episode_rewards)[-20:]):.1f}")
+        
+        print(f"💾 Models saved in 'models/' directory")
+        print(f"📈 Training logs in 'logs/' and 'tensorboard_logs/'")
+        print(f"🚀 Use 'python play_agent.py' to test your trained agent!")
+
+def test_configuration(config: Dict[str, Any]) -> bool:
+    """Test configuration before starting training"""
+    print("🧪 Testing configuration...")
+    
+    try:
+        play_area = config.get('play_area')
+        env = ImprovedOsuManiaEnv(
+            play_area=play_area,
+            num_keys=4,
+            show_window=True,
+            config_file="osu_config.json"
+        )
+        
+        print("Testing environment for 10 seconds...")
+        print("Make sure osu! is running and you can see the visualization window")
+        
+        obs, info = env.reset()
+        
+        for i in range(60):  # 10 seconds at ~60 FPS
+            action = env.action_space.sample()  # Random action
+            obs, reward, done, truncated, info = env.step(action)
+            time.sleep(0.16)
+            
+            if i % 30 == 0:
+                print(f"Step {i}: Combo={info.get('current_combo', 0)}, "
+                      f"Accuracy={info.get('accuracy', 0)*100:.1f}%")
         
         env.close()
+        print("✅ Configuration test passed!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Configuration test failed: {e}")
+        return False
+
+def main():
+    print("="*60)
+    print("🎵 ENHANCED OSU! MANIA RL TRAINING SCRIPT")
+    print("="*60)
+    
+    # Load configuration
+    config = load_config()
+    if not config:
+        print("\n🛠️ Please run setup first:")
+        print("   python enhanced_setup_tool.py")
+        return
+    
+    # Verify required dependencies
+    try:
+        import easyocr
+        print("✅ EasyOCR available for text recognition")
+    except ImportError:
+        print("❌ EasyOCR not found! Install with: pip install easyocr")
+        return
+    
+    # Show configuration
+    print(f"\n⚙️ Configuration loaded:")
+    print(f"   Play area: {config['play_area']}")
+    print(f"   Combo area: {config.get('combo_area', 'Not set')}")
+    print(f"   Score area: {config.get('score_area', 'Not set')}")
+    
+    # Test configuration option
+    test_config = input("\n🧪 Test configuration before training? (y/n): ").lower().strip()
+    if test_config == 'y':
+        if not test_configuration(config):
+            print("Please fix configuration issues before training")
+            return
+    
+    # Start training
+    start_training = input("\n🚀 Start training? (y/n): ").lower().strip()
+    if start_training == 'y':
+        train_agent(config)
+    else:
+        print("Training cancelled")
 
 if __name__ == '__main__':
-    main()
+    # Handle command line arguments
+    import sys
+    
+    if len(sys.argv) > 1:
+        command = sys.argv[1].lower()
+        
+        if command == "test":
+            # Just test configuration
+            config = load_config()
+            if config:
+                test_configuration(config)
+        
+        elif command == "eval":
+            # Run evaluation only
+            print("Evaluation mode not implemented yet")
+            
+        else:
+            print("Usage: python enhanced_train.py [test|eval]")
+    else:
+        main()
