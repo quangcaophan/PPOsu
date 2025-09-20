@@ -14,17 +14,12 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.logger import configure
-from stable_baselines3.common.env_util import make_vec_env
 import torch
 import time
 import numpy as np
-import matplotlib.pyplot as plt
 from collections import deque
-import cv2
-
 import json
-import warnings
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Try to import DirectML for AMD GPUs
 try:

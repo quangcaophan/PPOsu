@@ -6,11 +6,9 @@ import mss
 import pydirectinput
 import time
 from collections import deque
-import threading
 import easyocr
 import json
-import os
-from typing import Optional, Dict, Any, Tuple
+from typing import Dict, Any
 
 # Định nghĩa các phím cho chế độ 4K
 KEYS = ['d', 'f', 'j', 'k']
