@@ -10,14 +10,17 @@ import mss
 import numpy as np
 import time
 import json
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Optional
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
-class EnhancedOsuSetupTool:
+class OsuSetupTool:
     def __init__(self):
         self.sct = mss.mss()
         self.play_area = None
         self.combo_area = None
         self.score_area = None
+        self.accuracy_area = None
         
         # Mouse selection state
         self.drawing = False
@@ -29,7 +32,7 @@ class EnhancedOsuSetupTool:
         # Templates for game state detection
         self.result_template = None
         
-    def mouse_callback(self, event, x, y, flags, param):
+    def mouse_callback(self, event, x, y):
         """Handle mouse events for area selection"""
         if event == cv2.EVENT_LBUTTONDOWN:
             self.drawing = True
@@ -184,6 +187,18 @@ class EnhancedOsuSetupTool:
         )
         return self.score_area
     
+    def setup_accuracy_area(self) -> Optional[Dict[str, int]]:
+        """Setup accuracy reading area"""
+        print("=== Accuracy Setup ===")
+        print("Select the area where the accuracy is displayed")
+        print("This is usually in the top-right area of the screen")
+        
+        self.accuracy_area = self.interactive_area_selection(
+            "Accuracy Area Selection",
+            "Select where the accuracy is displayed"
+        )
+        return self.accuracy_area
+    
     def capture_result_template(self) -> bool:
         """Capture result screen template for game end detection"""
         print("=== Result Screen Template Capture ===")
@@ -201,11 +216,11 @@ class EnhancedOsuSetupTool:
                 gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
                 
                 # Save the template
-                template_path = "result_template.png"
+                template_path = r"template\result_template.png"
                 cv2.imwrite(template_path, gray)
                 
                 # Also save a preview for user to verify
-                preview_path = "result_template_preview.png"
+                preview_path = r"template\result_template_preview.png"
                 cv2.imwrite(preview_path, img)
                 
                 print(f"Result template saved as {template_path}")
@@ -228,15 +243,15 @@ class EnhancedOsuSetupTool:
     
     def test_ocr_areas(self) -> bool:
         """Test OCR on combo and score areas"""
-        if not self.combo_area or not self.score_area:
-            print("Combo and score areas must be set first!")
+        if not self.combo_area or not self.score_area or not self.accuracy_area:
+            print("Combo, score and accuracy areas must be set first!")
             return False
         
-        print("=== Testing OCR Areas ===")
-        print("Start playing a song to test OCR reading...")
+        print("=== Testing OCR Areas ==...")
         print("Press 'q' to stop testing")
         
         try:
+            import re
             import easyocr
             reader = easyocr.Reader(['en'])
         except ImportError:
@@ -247,69 +262,64 @@ class EnhancedOsuSetupTool:
         
         while True:
             try:
-                # Capture combo area
-                combo_img = np.array(self.sct.grab(self.combo_area))
+                combo_img_raw = self.sct.grab(self.combo_area)
+                score_img_raw = self.sct.grab(self.score_area)
+                accuracy_img_raw = self.sct.grab(self.accuracy_area)
+                
+                combo_img = np.array(combo_img_raw)
+                score_img = np.array(score_img_raw)
+                accuracy_img = np.array(accuracy_img_raw)
+                
                 combo_gray = cv2.cvtColor(combo_img, cv2.COLOR_BGRA2GRAY)
-                
-                # Capture score area  
-                score_img = np.array(self.sct.grab(self.score_area))
                 score_gray = cv2.cvtColor(score_img, cv2.COLOR_BGRA2GRAY)
+                accuracy_gray = cv2.cvtColor(accuracy_img, cv2.COLOR_BGRA2GRAY)
                 
-                # Process for OCR
-                combo_processed = cv2.threshold(combo_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-                score_processed = cv2.threshold(score_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+                combo_processed = cv2.threshold(combo_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+                score_processed = cv2.threshold(score_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
                 
-                # Read text
+                accuracy_processed_for_ocr = accuracy_gray
+                
                 combo_results = reader.readtext(combo_processed)
                 score_results = reader.readtext(score_processed)
+                accuracy_results = reader.readtext(accuracy_processed_for_ocr)
                 
-                # Extract numbers
-                combo_text = "No combo detected"
-                score_text = "No score detected"
+                combo_text = "No detect"
+                score_text = "No detect"
+                accuracy_text = "No detect"
                 
-                for (bbox, text, confidence) in combo_results:
-                    if confidence > 0.5:
-                        import re
-                        numbers = re.findall(r'\d+', text)
-                        if numbers:
-                            combo_text = f"Combo: {numbers[0]} (confidence: {confidence:.2f})"
-                            break
+                if combo_results:
+                    numbers = re.findall(r'\d+', combo_results[0][1])
+                    if numbers: combo_text = f"Combo: {numbers[0]}"
+
+                if score_results:
+                    numbers = re.findall(r'\d+', score_results[0][1].replace(',', ''))
+                    if numbers: score_text = f"Score: {numbers[0]}"
                 
-                for (bbox, text, confidence) in score_results:
-                    if confidence > 0.5:
-                        import re
-                        numbers = re.findall(r'\d+', text.replace(',', ''))
-                        if numbers:
-                            score_text = f"Score: {numbers[0]} (confidence: {confidence:.2f})"
-                            break
+                if accuracy_results:
+                    numbers = re.findall(r'[\d.]+', accuracy_results[0][1])
+                    if numbers and numbers[0] != '.':
+                        accuracy_text = f"Acc: {numbers[0]}"
+
+                combo_display = cv2.resize(cv2.cvtColor(combo_img, cv2.COLOR_BGRA2BGR), (200, 100))
+                score_display = cv2.resize(cv2.cvtColor(score_img, cv2.COLOR_BGRA2BGR), (200, 100))
+                accuracy_display = cv2.resize(cv2.cvtColor(accuracy_img, cv2.COLOR_BGRA2BGR), (200, 100))
                 
-                # Create display
-                combo_display = cv2.resize(combo_processed, (200, 100))
-                score_display = cv2.resize(score_processed, (200, 100))
+                display = np.zeros((200, 600, 3), dtype=np.uint8)
+                display[0:100, 0:200] = combo_display
+                display[0:100, 200:400] = score_display
+                display[0:100, 400:600] = accuracy_display
                 
-                # Combine displays
-                display = np.zeros((300, 400, 3), dtype=np.uint8)
-                display[0:100, 0:200] = cv2.cvtColor(combo_display, cv2.COLOR_GRAY2BGR)
-                display[0:100, 200:400] = cv2.cvtColor(score_display, cv2.COLOR_GRAY2BGR)
-                
-                # Add text
-                cv2.putText(display, "Combo Area", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                cv2.putText(display, "Score Area", (210, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                cv2.putText(display, combo_text, (10, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-                cv2.putText(display, score_text, (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-                cv2.putText(display, "Press 'q' to stop", (10, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                
+                cv2.putText(display, combo_text, (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(display, score_text, (210, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(display, accuracy_text, (410, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(display, "Press 'q' to stop", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 1)
+
                 cv2.imshow("OCR Test", display)
                 
             except Exception as e:
-                # Show error
-                error_img = np.zeros((200, 400, 3), dtype=np.uint8)
-                cv2.putText(error_img, f"OCR Error: {str(e)[:40]}", (10, 100), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                cv2.imshow("OCR Test", error_img)
+                print(f"Loop error: {e}")
             
-            key = cv2.waitKey(100) & 0xFF
-            if key == ord('q'):
+            if cv2.waitKey(100) & 0xFF == ord('q'):
                 break
         
         cv2.destroyAllWindows()
@@ -330,6 +340,8 @@ class EnhancedOsuSetupTool:
         frame_count = 0
         start_time = time.time()
         processing_times = []
+
+        display_fps = 0
         
         while True:
             frame_start = time.time()
@@ -352,46 +364,43 @@ class EnhancedOsuSetupTool:
                 frame_count += 1
                 elapsed = time.time() - start_time
                 
-                if elapsed > 1.0:
-                    fps = frame_count / elapsed
+                if elapsed > 0.5:
+                    display_fps = frame_count / elapsed
                     avg_processing = np.mean(processing_times)
+                    
+                    # Performance indicator
+                    if display_fps >= 55:
+                        status = "EXCELLENT"
+                        color = (0, 255, 0)
+                    elif display_fps >= 45:
+                        status = "GOOD"
+                        color = (0, 255, 255)
+                    elif display_fps >= 30:
+                        status = "ACCEPTABLE"
+                        color = (0, 165, 255)
+                    else:
+                        status = "POOR"
+                        color = (0, 0, 255)
                     
                     # Reset counters
                     frame_count = 0
                     start_time = time.time()
-                else:
-                    fps = 0
-                    avg_processing = np.mean(processing_times) if processing_times else 0
-                
+
+                avg_processing = np.mean(processing_times) if processing_times else 0
+
                 # Create visualization
                 display_img = cv2.resize(resized, (420, 420))
                 display_img = cv2.cvtColor(display_img, cv2.COLOR_GRAY2BGR)
                 
                 # Add performance info
-                cv2.putText(display_img, f"FPS: {fps:.1f}", (10, 30), 
+                cv2.putText(display_img, f"FPS: {display_fps:.1f}", (10, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 cv2.putText(display_img, f"Processing: {avg_processing:.1f}ms", (10, 60), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 cv2.putText(display_img, f"Target: 60 FPS (16.7ms)", (10, 90), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                
-                # Performance indicator
-                if fps >= 55:
-                    status = "EXCELLENT"
-                    color = (0, 255, 0)
-                elif fps >= 45:
-                    status = "GOOD"
-                    color = (0, 255, 255)
-                elif fps >= 30:
-                    status = "ACCEPTABLE"
-                    color = (0, 165, 255)
-                else:
-                    status = "POOR"
-                    color = (0, 0, 255)
-                
                 cv2.putText(display_img, f"Performance: {status}", (10, 120), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                
                 cv2.putText(display_img, "Press 'q' to stop", (10, 400), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
@@ -423,7 +432,7 @@ class EnhancedOsuSetupTool:
     
     def save_configuration(self, filename: str = "osu_config.json") -> bool:
         """Save all configuration to JSON file"""
-        if not all([self.play_area, self.combo_area, self.score_area]):
+        if not all([self.play_area, self.combo_area, self.score_area, self.accuracy_area]):
             print("All areas must be configured before saving!")
             return False
         
@@ -431,6 +440,7 @@ class EnhancedOsuSetupTool:
             'play_area': self.play_area,
             'combo_area': self.combo_area,
             'score_area': self.score_area,
+            'accuracy_area': self.accuracy_area,
             'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
             'version': '2.0'
         }
@@ -448,6 +458,7 @@ class EnhancedOsuSetupTool:
             print(f"PLAY_AREA = {self.play_area}")
             print(f"COMBO_AREA = {self.combo_area}")
             print(f"SCORE_AREA = {self.score_area}")
+            print(f"ACCURACY_AREA = {self.accuracy_area}")
             print("="*50)
             
             return True
@@ -465,11 +476,13 @@ class EnhancedOsuSetupTool:
             self.play_area = config.get('play_area')
             self.combo_area = config.get('combo_area')  
             self.score_area = config.get('score_area')
+            self.accuracy_area = config.get('accuracy_area')
             
             print(f"✅ Configuration loaded from {filename}")
             print(f"Play area: {self.play_area}")
             print(f"Combo area: {self.combo_area}")
             print(f"Score area: {self.score_area}")
+            print(f"Accuracy area: {self.accuracy_area}")
             
             return True
             
@@ -527,17 +540,24 @@ class EnhancedOsuSetupTool:
             print("❌ Score area setup failed!")
             return False
         
-        # Step 4: Result template (optional)
+        # Step 4: Accuracy area
         print("\n" + "="*40)
-        print("STEP 4: RESULT TEMPLATE (OPTIONAL)")
+        print("STEP 4: ACCURACY AREA SETUP") 
+        print("="*40)
+        if not self.setup_accuracy_area():
+            print("❌ Accuracy area setup failed!")
+            return False
+        
+        print("\n" + "="*40)
+        print("RESULT TEMPLATE (OPTIONAL)")
         print("="*40)
         capture_template = input("Capture result screen template? (y/n): ").lower().strip()
         if capture_template == 'y':
             self.capture_result_template()
         
-        # Step 5: Testing
+        # Testing
         print("\n" + "="*40)
-        print("STEP 5: TESTING CONFIGURATION")
+        print("TESTING CONFIGURATION")
         print("="*40)
         
         print("Testing capture performance...")
@@ -546,9 +566,9 @@ class EnhancedOsuSetupTool:
         print("Testing OCR areas...")  
         self.test_ocr_areas()
         
-        # Step 6: Save configuration
+        # Save configuration
         print("\n" + "="*40)
-        print("STEP 6: SAVE CONFIGURATION")
+        print("SAVE CONFIGURATION")
         print("="*40)
         
         if self.save_configuration():
@@ -561,7 +581,7 @@ class EnhancedOsuSetupTool:
             return False
 
 def main():
-    setup_tool = EnhancedOsuSetupTool()
+    setup_tool = OsuSetupTool()
     
     import sys
     if len(sys.argv) > 1:
@@ -582,6 +602,7 @@ def main():
             setup_tool.setup_play_area()
             setup_tool.setup_combo_area()
             setup_tool.setup_score_area()
+            setup_tool.setup_accuracy_area()
             setup_tool.save_configuration()
             
         elif command == "template":

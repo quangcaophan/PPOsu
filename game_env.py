@@ -13,20 +13,24 @@ from typing import Dict, Any
 # Định nghĩa các phím cho chế độ 4K
 KEYS = ['d', 'f', 'j', 'k']
 
-class ImprovedOsuManiaEnv(gym.Env):
+class OsuManiaEnv(gym.Env):
     def __init__(self, play_area=None, num_keys=4, show_window=True, config_file="osu_config.json"):
-        super(ImprovedOsuManiaEnv, self).__init__()
+        super(OsuManiaEnv, self).__init__()
 
         # Load configuration
         self.config = self._load_config(config_file)
         self.play_area = play_area or self.config.get('play_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
+        self.combo_area = self.config.get('combo_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
+        self.score_area = self.config.get('score_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
+        self.score_per_hit_area = self.config.get('score_per_hit_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
+        self.accuracy_area = self.config.get('accuracy_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
         
         self.sct = mss.mss()
         self.num_keys = num_keys
         self.show_window = show_window
         
-        # Initialize OCR reader (supports Vietnamese and English)
-        self.ocr_reader = easyocr.Reader(['en'])
+        # Initialize OCR reader
+        self.ocr_reader = easyocr.Reader(['en'],gpu=True)
         
         # Define areas for different UI elements
         self._setup_ui_areas()
@@ -50,8 +54,14 @@ class ImprovedOsuManiaEnv(gym.Env):
         
         # Enhanced reward tracking with OCR
         self.last_combo = 0
+
         self.last_score = 0
         self.combo_history = deque(maxlen=5)
+        
+        self.last_accuracy = 1.0  # Start with perfect accuracy
+        self.accuracy_history = deque(maxlen=10)
+        self.accuracy_trend_bonus = 0.0
+        
         self.miss_count = 0
         self.hit_count = 0
         
@@ -122,6 +132,11 @@ class ImprovedOsuManiaEnv(gym.Env):
         try:
             sct_img = self.sct.grab(self.combo_area)
             img = np.array(sct_img)
+            print(f"[DEBUG OCR] Combo OCR raw text: {text}, parsed: {numbers}")
+
+        except Exception:
+            pass
+            img = np.array(sct_img)
             
             # Preprocess for better OCR
             gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
@@ -150,7 +165,7 @@ class ImprovedOsuManiaEnv(gym.Env):
             return self.last_combo  # Return last known combo if OCR fails
             
         except Exception as e:
-            if self.step_count % 100 == 0:  # Don't spam error messages
+            if self.step_count % 100 == 0:
                 print(f"OCR Error (step {self.step_count}): {e}")
             return self.last_combo
 
@@ -182,6 +197,39 @@ class ImprovedOsuManiaEnv(gym.Env):
             
         except Exception as e:
             return self.last_score
+    
+    def _read_accuracy_ocr(self) -> float:
+        """Read accuracy using OCR"""
+        try:
+            sct_img = self.sct.grab(self.accuracy_area)
+            img = np.array(sct_img)
+            
+            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(gray)
+            _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            results = self.ocr_reader.readtext(thresh)
+            
+            for (bbox, text, confidence) in results:
+                if confidence > 0.5:
+                    import re
+                    # Look for percentage format like "95.67%" or "95.67"
+                    percentage_match = re.search(r'(\d+\.?\d*)%?', text)
+                    if percentage_match:
+                        accuracy_value = float(percentage_match.group(1))
+                        # If the value is > 1, it's already a percentage (95.67)
+                        # If <= 1, it's a decimal (0.9567)
+                        if accuracy_value > 1:
+                            return accuracy_value / 100.0  # Convert to decimal
+                        else:
+                            return accuracy_value
+            print(f"[DEBUG OCR] Detected text: {text}, parsed: {accuracy_value}")
+
+            return self.last_accuracy
+            
+        except Exception as e:
+            return self.last_accuracy
 
     def _detect_long_notes(self, current_frame) -> Dict[int, bool]:
         """Detect long notes in each column"""
@@ -225,92 +273,185 @@ class ImprovedOsuManiaEnv(gym.Env):
         return long_notes
 
     def _calculate_reward_with_ocr(self, current_frame, action) -> float:
-        """Enhanced reward calculation using OCR data"""
+        """Enhanced reward calculation using OCR data INCLUDING ACCURACY"""
         reward = 0.0
-        
+
         # 1. Read game state using OCR
         current_combo = self._read_combo_ocr()
         current_score = self._read_score_ocr()
-        
-        # Update combo history
+        current_accuracy = self._read_accuracy_ocr()
+
+        # 🔒 FIX: đảm bảo không bao giờ là None
+        current_combo = int(current_combo) if current_combo is not None else 0
+        current_score = int(current_score) if current_score is not None else 0
+        current_accuracy = float(current_accuracy) if current_accuracy is not None else 0.0
+
+        self.last_combo = int(self.last_combo) if self.last_combo is not None else 0
+        self.last_score = int(self.last_score) if self.last_score is not None else 0
+        self.last_accuracy = float(self.last_accuracy) if self.last_accuracy is not None else 0.0
+                
+        # Update histories
         self.combo_history.append(current_combo)
+        self.accuracy_history.append(current_accuracy)
         
-        # 2. Primary reward: Combo-based feedback
+        # 2. Primary reward: Combo-based feedback (same as before)
         if current_combo > self.last_combo:
-            # Successful hit! This is the most important signal
-            hit_reward = 5.0 + (current_combo * 0.1)  # Bonus for longer combos
+            # Successful hit! Base reward
+            hit_reward = 5.0 + (current_combo * 0.1)
+            
+            # *** ACCURACY MULTIPLIER *** 
+            # High accuracy = higher rewards for hits
+            accuracy_multiplier = 1.0 + (current_accuracy - 0.8) * 2.0  # Bonus for >80% accuracy
+            accuracy_multiplier = max(0.5, min(2.0, accuracy_multiplier))  # Clamp between 0.5-2.0
+            
+            hit_reward *= accuracy_multiplier
             reward += hit_reward
             self.hit_count += 1
             
-            # Extra bonus for hitting during detected activity
+            # Extra accuracy-based bonus for consecutive accurate hits
+            if current_accuracy > 0.95 and self.last_accuracy > 0.95:
+                reward += 3.0  # Bonus for maintaining high accuracy
+            
+            # Activity timing bonus (same as before)
             activity_score = self._detect_game_activity(current_frame)
             if activity_score > 0.02:
-                reward += 2.0  # Reward for hitting when there's actually something to hit
+                reward += 2.0
                 
         elif current_combo == 0 and self.last_combo > 0:
-            # Combo break (miss) - this is a strong negative signal
-            miss_penalty = -15.0 - (self.last_combo * 0.2)  # Harder penalty for breaking long combos
+            # Combo break (miss) 
+            miss_penalty = -15.0 - (self.last_combo * 0.2)
+            
+            # *** ACCURACY PENALTY MODIFIER ***
+            # If accuracy was already low, smaller penalty (already struggling)
+            # If accuracy was high, bigger penalty (unexpected mistake)
+            if self.last_accuracy > 0.9:
+                miss_penalty *= 1.5  # Harsher penalty for high-accuracy players
+            elif self.last_accuracy < 0.7:
+                miss_penalty *= 0.7  # Gentler penalty for struggling players
+                
             reward += miss_penalty
             self.miss_count += 1
             
         elif current_combo == self.last_combo and current_combo > 0:
             # Combo maintained, small positive reinforcement
-            reward += 0.5
+            base_maintenance = 0.5
+            
+            # *** ACCURACY-BASED MAINTENANCE BONUS ***
+            if current_accuracy > 0.95:
+                base_maintenance *= 1.5  # Bonus for maintaining high accuracy
+            elif current_accuracy < 0.8:
+                base_maintenance *= 0.5  # Reduced reward for poor accuracy
+                
+            reward += base_maintenance
         
-        # 3. Score-based reward (secondary)
+        # 3. Direct Accuracy-Based Rewards
+        accuracy_change = current_accuracy - self.last_accuracy
+        
+        if accuracy_change > 0.01:  # Accuracy improved significantly
+            reward += accuracy_change * 50.0  # Strong incentive for accuracy improvement
+        elif accuracy_change < -0.05:  # Accuracy dropped significantly  
+            reward -= abs(accuracy_change) * 30.0  # Penalty for accuracy loss
+        
+        # 4. Accuracy Trend Rewards
+        if len(self.accuracy_history) >= 5:
+            recent_accuracies = list(self.accuracy_history)[-5:]
+            accuracy_trend = np.mean(recent_accuracies) - np.mean(list(self.accuracy_history)[:-5] if len(self.accuracy_history) > 5 else [self.last_accuracy])
+            
+            if accuracy_trend > 0.01:  # Improving trend
+                self.accuracy_trend_bonus = min(5.0, self.accuracy_trend_bonus + 0.5)
+            elif accuracy_trend < -0.01:  # Declining trend
+                self.accuracy_trend_bonus = max(-3.0, self.accuracy_trend_bonus - 0.3)
+            
+            reward += self.accuracy_trend_bonus * 0.1  # Small but consistent trend reward
+        
+        # 5. Score-based reward (modified with accuracy)
         score_diff = current_score - self.last_score
         if score_diff > 0:
-            reward += score_diff / 10000.0  # Small reward for score increase
+            base_score_reward = score_diff / 10000.0
+            # Higher accuracy = more score reward value
+            accuracy_score_multiplier = 0.5 + (current_accuracy * 1.5)
+            reward += base_score_reward * accuracy_score_multiplier
         
-        # 4. Long note handling
+        # 6. Long note handling (same as before, but with accuracy consideration)
         action_combo = [bool((action >> i) & 1) for i in range(self.num_keys)]
         detected_long_notes = self._detect_long_notes(current_frame)
         
         for i in range(self.num_keys):
             # Long note start detection
             if detected_long_notes[i] and not self.long_note_states[i]:
-                # Starting a long note
                 if action_combo[i]:
-                    reward += 3.0  # Good long note start
+                    long_note_reward = 3.0
+                    # Accuracy bonus for long note starts
+                    if current_accuracy > 0.9:
+                        long_note_reward *= 1.3
+                    reward += long_note_reward
                     self.long_note_states[i] = True
                     self.long_note_start_frames[i] = self.step_count
                 else:
-                    reward -= 2.0  # Missed long note start
+                    penalty = -2.0
+                    # Higher penalty if accuracy suggests we should be better
+                    if current_accuracy > 0.85:
+                        penalty *= 1.2
+                    reward += penalty
             
             # Long note continuation
             elif self.long_note_states[i]:
                 if detected_long_notes[i]:
-                    # Long note is still active
                     if action_combo[i]:
-                        reward += 0.2  # Good continuation
+                        continuation_reward = 0.2
+                        # Accuracy bonus for good long note holding
+                        if current_accuracy > 0.9:
+                            continuation_reward *= 1.2
+                        reward += continuation_reward
                     else:
                         reward -= 3.0  # Released too early
                         self.long_note_states[i] = False
                 else:
                     # Long note ended
                     if not action_combo[i]:
-                        # Good release timing
                         hold_duration = self.step_count - self.long_note_start_frames[i]
-                        reward += 2.0 + (hold_duration * 0.01)
+                        completion_reward = 2.0 + (hold_duration * 0.01)
+                        # Accuracy bonus for successful long note completion
+                        if current_accuracy > 0.9:
+                            completion_reward *= 1.4
+                        reward += completion_reward
                     else:
                         reward -= 1.0  # Held too long
                     self.long_note_states[i] = False
         
-        # 5. Activity-based penalties for wrong actions
+        # 7. Activity-based penalties (with accuracy consideration)
         activity_score = self._detect_game_activity(current_frame)
         num_keys_pressed = sum(action_combo)
         
-        # Penalty for pressing keys when no activity (but don't punish during long notes)
+        # Penalty for pressing keys when no activity
         if activity_score < 0.005 and num_keys_pressed > 0 and not any(self.long_note_states):
-            reward -= 1.0 * num_keys_pressed
+            base_penalty = 1.0 * num_keys_pressed
+            # Higher accuracy players get bigger penalty for mistimed hits
+            if current_accuracy > 0.9:
+                base_penalty *= 1.3
+            elif current_accuracy < 0.7:
+                base_penalty *= 0.8  # More forgiving for beginners
+            reward -= base_penalty
         
-        # 6. Inactivity penalty
+        # 8. Milestone accuracy rewards
+        if current_accuracy >= 0.99 and self.last_accuracy < 0.99:
+            reward += 20.0  # Big bonus for reaching 99%+
+            print("[TARGET] Accuracy Milestone: 99%+!")
+        elif current_accuracy >= 0.95 and self.last_accuracy < 0.95:
+            reward += 10.0  # Bonus for reaching 95%+
+            print("[TARGET] Accuracy Milestone: 95%+!")
+        elif current_accuracy >= 0.90 and self.last_accuracy < 0.90:
+            reward += 5.0   # Bonus for reaching 90%+
+            print("[TARGET] Accuracy Milestone: 90%+!")
+        
+        # 9. Inactivity penalty (same as before)
         if activity_score < 0.001 and sum(self.combo_history) == 0:
-            reward -= 0.1  # Small penalty for complete inactivity
+            reward -= 0.1
         
         # Update state for next step
         self.last_combo = current_combo
         self.last_score = current_score
+        self.last_accuracy = current_accuracy  # <- NEW!
         
         return reward
 
@@ -422,24 +563,30 @@ class ImprovedOsuManiaEnv(gym.Env):
         # 5. Show visualization if enabled
         if self.show_window:
             self._show_enhanced_visualization(new_frame, action_combo, reward)
-        
+        score_diff = self.last_score - getattr(self, 'prev_score', 0)
+        self.prev_score = self.last_score
         # 6. Comprehensive info
         info = {
             'step_count': self.step_count,
             'current_combo': self.last_combo,
             'current_score': self.last_score,
+            'current_accuracy': self.last_accuracy,  # <- NEW!
             'hit_count': self.hit_count,
             'miss_count': self.miss_count,
             'accuracy': self.hit_count / max(self.hit_count + self.miss_count, 1),
+            'ocr_accuracy': self.last_accuracy,  # <- NEW! (OCR-read accuracy vs calculated accuracy)
             'activity_score': self._detect_game_activity(new_frame),
             'keys_pressed': action_combo,
             'long_note_states': self.long_note_states.copy(),
+            'accuracy_trend': self.accuracy_trend_bonus,  # <- NEW!
             'reward_components': {
                 'total': reward,
                 'combo': self.last_combo,
-                'score_diff': self.last_score - getattr(self, 'prev_score', 0)
+                'score_diff': score_diff,
+                'accuracy': self.last_accuracy  # <- NEW!
             }
         }
+
         
         return self.last_four_frames.copy(), reward, done, truncated, info
 
@@ -479,9 +626,10 @@ class ImprovedOsuManiaEnv(gym.Env):
         cv2.putText(vis_frame, f"Score: {self.last_score}", (10, info_y + 2*line_height), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
-        accuracy = self.hit_count / max(self.hit_count + self.miss_count, 1) * 100
-        cv2.putText(vis_frame, f"Accuracy: {accuracy:.1f}%", (10, info_y + 3*line_height), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+        cv2.putText(vis_frame, f"OCR Accuracy: {self.last_accuracy*100:.1f}%", (10, info_y + 6*line_height), 
+           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+        cv2.putText(vis_frame, f"Acc Trend: {self.accuracy_trend_bonus:+.2f}", (10, info_y + 7*line_height), 
+           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         cv2.putText(vis_frame, f"Hits: {self.hit_count} | Miss: {self.miss_count}", (10, info_y + 4*line_height), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
@@ -541,6 +689,9 @@ class ImprovedOsuManiaEnv(gym.Env):
         self.long_note_start_frames = [0] * self.num_keys
         self.game_ended_frames = 0
         self.last_activity_time = time.time()
+        self.last_accuracy = 1.0
+        self.accuracy_history.clear()
+        self.accuracy_trend_bonus = 0.0
         
         # Wait for game to start
         time.sleep(3)
@@ -555,11 +706,13 @@ class ImprovedOsuManiaEnv(gym.Env):
         # Initial OCR reading to establish baseline
         self.last_combo = self._read_combo_ocr()
         self.last_score = self._read_score_ocr()
-        
+        self.last_accuracy = self._read_accuracy_ocr()
+
         info = {
             'step_count': 0,
             'initial_combo': self.last_combo,
-            'initial_score': self.last_score
+            'initial_score': self.last_score,
+            'initial_accuracy': self.last_accuracy
         }
         return self.last_four_frames.copy(), info
 

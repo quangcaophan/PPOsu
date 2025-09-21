@@ -19,31 +19,26 @@ easyocr>=1.7.0
 pydirectinput>=1.0.4
 
 # Data Processing and Analysis
-pandas>=2.0.0
-matplotlib>=3.7.0
-seaborn>=0.12.0
+# pandas>=2.0.0
+# matplotlib>=3.7.0
+# seaborn>=0.12.0
 
 # Logging and Monitoring
 tensorboard>=2.13.0
-wandb>=0.15.0  # Optional: for advanced experiment tracking
+# wandb>=0.15.0  # Optional: for advanced experiment tracking
 
 # Utilities
-tqdm>=4.65.0  # Progress bars
-psutil>=5.9.0  # System monitoring
-Pillow>=10.0.0  # Image processing
+# tqdm>=4.65.0  # Progress bars
+# psutil>=5.9.0  # System monitoring
+# Pillow>=10.0.0  # Image processing
 
 # Development and Testing
-pytest>=7.4.0
-black>=23.0.0  # Code formatting
-flake8>=6.0.0  # Code linting
-
-# Optional: Advanced features
-pytesseract>=0.3.10  # Alternative OCR engine
-# keyboard>=0.13.5     # Alternative input handling
-# playsound>=1.3.0     # Audio feedback during training
+# pytest>=7.4.0
+# black>=23.0.0  # Code formatting
+# flake8>=6.0.0  # Code linting
 
 # Performance optimization (optional)
-numba>=0.58.0        # JIT compilation for speed
+# numba>=0.58.0        # JIT compilation for speed
 # cupy-cuda12x>=12.0.0 # GPU-accelerated NumPy (for NVIDIA)
 
 # GUI and Visualization (optional)

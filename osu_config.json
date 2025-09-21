@@ -1,22 +1,28 @@
 {
     "play_area": {
-        "top": 3,
-        "left": 675,
-        "width": 557,
-        "height": 1035
+        "top": 158,
+        "left": 761,
+        "width": 394,
+        "height": 709
     },
     "combo_area": {
-        "top": 131,
-        "left": 1652,
-        "width": 212,
-        "height": 53
+        "top": 289,
+        "left": 1444,
+        "width": 162,
+        "height": 37
     },
     "score_area": {
-        "top": 6,
-        "left": 1592,
-        "width": 321,
-        "height": 72
+        "top": 163,
+        "left": 1396,
+        "width": 245,
+        "height": 57
     },
-    "timestamp": "2025-09-20 11:16:31",
+    "accuracy_area": {
+        "top": 236,
+        "left": 1508,
+        "width": 60,
+        "height": 36
+    },
+    "timestamp": "2025-09-21 19:44:22",
     "version": "2.0"
 }

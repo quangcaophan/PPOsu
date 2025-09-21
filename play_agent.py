@@ -3,7 +3,7 @@ Script để chạy agent đã được train để chơi osu! mania
 """
 
 from stable_baselines3 import PPO
-from improved_game_env import OsuManiaEnv
+from game_env import OsuManiaEnv
 import time
 import cv2
 import numpy as np

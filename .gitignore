@@ -1,1 +1,6 @@
 logs/
+*.backup_20250920*
+models/
+_pycache_/
+__pycache__/
+*cpython-310.pyc
