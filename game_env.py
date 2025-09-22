@@ -9,9 +9,13 @@ from collections import deque
 import easyocr
 import json
 from typing import Dict, Any
-
+import re
 # Định nghĩa các phím cho chế độ 4K
 KEYS = ['d', 'f', 'j', 'k']
+FRAME_SIZE = 96
+VISUALIZATION_SIZE = 420
+TARGET_FPS = 60
+FRAME_DELAY = 1.0 / TARGET_FPS
 
 class OsuManiaEnv(gym.Env):
     def __init__(self, play_area=None, num_keys=4, show_window=True, config_file="osu_config.json"):
@@ -22,7 +26,6 @@ class OsuManiaEnv(gym.Env):
         self.play_area = play_area or self.config.get('play_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
         self.combo_area = self.config.get('combo_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
         self.score_area = self.config.get('score_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
-        self.score_per_hit_area = self.config.get('score_per_hit_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
         self.accuracy_area = self.config.get('accuracy_area', {'top': 230, 'left': 710, 'width': 490, 'height': 750})
         
         self.sct = mss.mss()
@@ -39,11 +42,10 @@ class OsuManiaEnv(gym.Env):
         self.action_space = spaces.Discrete(2**self.num_keys)
 
         # Observation space: 4 consecutive grayscale frames
-        self.observation_space = spaces.Box(low=0, high=255,
-                                            shape=(4, 84, 84), dtype=np.uint8)
+        self.observation_space = spaces.Box(low=0, high=255,shape=(4, FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
         
         # State tracking
-        self.last_four_frames = np.zeros((4, 84, 84), dtype=np.uint8)
+        self.last_four_frames = np.zeros((4, FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
         self.previous_keys_state = [False] * self.num_keys
         self.current_keys_state = [False] * self.num_keys
         
@@ -54,7 +56,6 @@ class OsuManiaEnv(gym.Env):
         
         # Enhanced reward tracking with OCR
         self.last_combo = 0
-
         self.last_score = 0
         self.combo_history = deque(maxlen=5)
         
@@ -132,11 +133,6 @@ class OsuManiaEnv(gym.Env):
         try:
             sct_img = self.sct.grab(self.combo_area)
             img = np.array(sct_img)
-            print(f"[DEBUG OCR] Combo OCR raw text: {text}, parsed: {numbers}")
-
-        except Exception:
-            pass
-            img = np.array(sct_img)
             
             # Preprocess for better OCR
             gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
@@ -153,15 +149,17 @@ class OsuManiaEnv(gym.Env):
             
             # Look for combo number (usually format "123x" or just "123")
             for (bbox, text, confidence) in results:
-                if confidence > 0.5:  # Only accept confident readings
+                if confidence > 0.5:
+                    numbers = re.findall(r'\d+', text)
+                    print(f"[DEBUG OCR] Combo OCR raw text: {text}, parsed: {numbers}")
                     # Extract numbers from text
-                    import re
+                    
                     numbers = re.findall(r'\d+', text)
                     if numbers:
                         combo = int(numbers[0])
                         if combo >= 0:  # Sanity check
                             return combo
-            
+
             return self.last_combo  # Return last known combo if OCR fails
             
         except Exception as e:
@@ -184,7 +182,6 @@ class OsuManiaEnv(gym.Env):
             
             for (bbox, text, confidence) in results:
                 if confidence > 0.5:
-                    import re
                     # Remove commas and extract numbers
                     text_cleaned = text.replace(',', '')
                     numbers = re.findall(r'\d+', text_cleaned)
@@ -213,7 +210,6 @@ class OsuManiaEnv(gym.Env):
             
             for (bbox, text, confidence) in results:
                 if confidence > 0.5:
-                    import re
                     # Look for percentage format like "95.67%" or "95.67"
                     percentage_match = re.search(r'(\d+\.?\d*)%?', text)
                     if percentage_match:
@@ -272,16 +268,11 @@ class OsuManiaEnv(gym.Env):
             
         return long_notes
 
-    def _calculate_reward_with_ocr(self, current_frame, action) -> float:
-        """Enhanced reward calculation using OCR data INCLUDING ACCURACY"""
+    def _calculate_reward_with_ocr(self, current_frame, action, 
+                              current_combo, current_score, current_accuracy) -> float:
+        """Enhanced reward calculation using pre-read OCR data"""
         reward = 0.0
-
-        # 1. Read game state using OCR
-        current_combo = self._read_combo_ocr()
-        current_score = self._read_score_ocr()
-        current_accuracy = self._read_accuracy_ocr()
-
-        # 🔒 FIX: đảm bảo không bao giờ là None
+        
         current_combo = int(current_combo) if current_combo is not None else 0
         current_score = int(current_score) if current_score is not None else 0
         current_accuracy = float(current_accuracy) if current_accuracy is not None else 0.0
@@ -294,7 +285,7 @@ class OsuManiaEnv(gym.Env):
         self.combo_history.append(current_combo)
         self.accuracy_history.append(current_accuracy)
         
-        # 2. Primary reward: Combo-based feedback (same as before)
+        # Primary reward: Combo-based feedback (same as before)
         if current_combo > self.last_combo:
             # Successful hit! Base reward
             hit_reward = 5.0 + (current_combo * 0.1)
@@ -451,7 +442,7 @@ class OsuManiaEnv(gym.Env):
         # Update state for next step
         self.last_combo = current_combo
         self.last_score = current_score
-        self.last_accuracy = current_accuracy  # <- NEW!
+        self.last_accuracy = current_accuracy
         
         return reward
 
@@ -525,6 +516,39 @@ class OsuManiaEnv(gym.Env):
             pass
         
         return False
+    
+    def _execute_action_safely(self, action_combo):
+        try:
+            for i in range(self.num_keys):
+                if self.previous_keys_state[i] and not action_combo[i]:
+                    pydirectinput.keyUp(KEYS[i])
+                elif not self.previous_keys_state[i] and action_combo[i]:
+                    pydirectinput.keyDown(KEYS[i])
+            self.previous_keys_state = action_combo.copy()
+        except Exception as e:
+            print(f"Key execution error: {e}")
+            # Emergency key release
+            for key in KEYS:
+                try:
+                    pydirectinput.keyUp(key)
+                except:
+                    pass
+    
+    def _validate_ocr_reading(self, value, value_type, previous_value):
+        """Validate OCR readings to prevent invalid jumps"""
+        if value_type == "combo":
+            # Combo can only increase or reset to 0
+            if value < previous_value and value != 0:
+                return previous_value
+        elif value_type == "score":
+            # Score can only increase
+            if value < previous_value:
+                return previous_value
+        elif value_type == "accuracy":
+            # Accuracy shouldn't change more than 10% in one step
+            if abs(value - previous_value) > 0.1:
+                return previous_value
+        return value
 
     def step(self, action):
         self.step_count += 1
@@ -532,21 +556,35 @@ class OsuManiaEnv(gym.Env):
         # 1. Execute action with improved timing
         action_combo = [bool((action >> i) & 1) for i in range(self.num_keys)]
         
-        # Handle key state changes more smoothly
-        for i in range(self.num_keys):
-            if self.previous_keys_state[i] and not action_combo[i]:
-                pydirectinput.keyUp(KEYS[i])
-            elif not self.previous_keys_state[i] and action_combo[i]:
-                pydirectinput.keyDown(KEYS[i])
+        current_combo = self._read_combo_ocr()
+        current_combo = self._validate_ocr_reading(current_combo, "combo", self.last_combo)
+
+        if self.step_count % 3 == 0:
+            current_score = self._read_score_ocr()
+            current_accuracy = self._read_accuracy_ocr()
+
+            current_score = self._validate_ocr_reading(current_score, "score", self.last_score)
+            current_accuracy = self._validate_ocr_reading(current_accuracy, "accuracy", self.last_accuracy)
+            
+            self.last_score = current_score
+            self.last_accuracy = current_accuracy
+        else:
+            current_score = self.last_score
+            current_accuracy = self.last_accuracy
         
-        self.previous_keys_state = action_combo.copy()
+        self.last_combo = current_combo
+
+        # Handle key state changes more smoothly
+        self._execute_action_safely(action_combo)
+        
         self.current_keys_state = action_combo.copy()
         
         # Frame timing (targeting 60 FPS)
-        time.sleep(0.016)
+        time.sleep(FRAME_DELAY)
         
         # 2. Get new state
         new_frame = self._get_state()
+        
         self.frame_buffer.append(new_frame.copy())
         
         # Update frame stack
@@ -554,7 +592,8 @@ class OsuManiaEnv(gym.Env):
         self.last_four_frames[-1] = new_frame
         
         # 3. Calculate reward using enhanced system
-        reward = self._calculate_reward_with_ocr(new_frame, action)
+        reward = self._calculate_reward_with_ocr(new_frame, action, 
+                                           current_combo, current_score, current_accuracy)
         
         # 4. Check termination conditions
         done = (self.step_count >= self.max_steps) or self._is_game_ended(new_frame)
@@ -570,20 +609,20 @@ class OsuManiaEnv(gym.Env):
             'step_count': self.step_count,
             'current_combo': self.last_combo,
             'current_score': self.last_score,
-            'current_accuracy': self.last_accuracy,  # <- NEW!
+            'current_accuracy': self.last_accuracy,
             'hit_count': self.hit_count,
             'miss_count': self.miss_count,
             'accuracy': self.hit_count / max(self.hit_count + self.miss_count, 1),
-            'ocr_accuracy': self.last_accuracy,  # <- NEW! (OCR-read accuracy vs calculated accuracy)
+            'ocr_accuracy': self.last_accuracy,
             'activity_score': self._detect_game_activity(new_frame),
             'keys_pressed': action_combo,
             'long_note_states': self.long_note_states.copy(),
-            'accuracy_trend': self.accuracy_trend_bonus,  # <- NEW!
+            'accuracy_trend': self.accuracy_trend_bonus,
             'reward_components': {
                 'total': reward,
                 'combo': self.last_combo,
                 'score_diff': score_diff,
-                'accuracy': self.last_accuracy  # <- NEW!
+                'accuracy': self.last_accuracy
             }
         }
 
@@ -593,11 +632,11 @@ class OsuManiaEnv(gym.Env):
     def _show_enhanced_visualization(self, frame, action_combo, reward):
         """Enhanced visualization with OCR data and long note info"""
         # Create larger visualization
-        vis_frame = cv2.resize(frame, (420, 420))  # 5x larger
+        vis_frame = cv2.resize(frame, (VISUALIZATION_SIZE, VISUALIZATION_SIZE))  # 5x larger
         vis_frame = cv2.cvtColor(vis_frame, cv2.COLOR_GRAY2BGR)
         
         # Draw key indicators
-        key_width = 420 // self.num_keys
+        key_width = VISUALIZATION_SIZE // self.num_keys
         for i in range(self.num_keys):
             x = i * key_width
             
@@ -638,9 +677,9 @@ class OsuManiaEnv(gym.Env):
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Draw hit zones and long note indicators
-        hit_zone_top = int(420 * 0.6)
-        hit_zone_bottom = int(420 * 0.8)
-        cv2.rectangle(vis_frame, (0, hit_zone_top), (420, hit_zone_bottom), (255, 0, 0), 2)
+        hit_zone_top = int(VISUALIZATION_SIZE * 0.6)
+        hit_zone_bottom = int(VISUALIZATION_SIZE * 0.8)
+        cv2.rectangle(vis_frame, (0, hit_zone_top), (VISUALIZATION_SIZE, hit_zone_bottom), (255, 0, 0), 2)
         
         # Long note indicators
         for i, is_long_note in enumerate(self.long_note_states):

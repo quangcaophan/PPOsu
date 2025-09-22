@@ -45,7 +45,7 @@ else:
 # Import our enhanced environment
 from game_env import OsuManiaEnv
 
-class EnhancedTrainingCallback(BaseCallback):
+class TrainingCallback(BaseCallback):
     """Advanced callback for monitoring training progress with OCR metrics"""
     
     def __init__(self, verbose=0, save_freq=10000):
@@ -286,12 +286,21 @@ def create_model(env, device: str, config: Dict[str, Any]) -> PPO:
     latest_model_path = "models/latest_model.zip"
     if os.path.exists(latest_model_path):
         print(f"🔄 Loading existing model from {latest_model_path}")
+        
         try:
+            # Load model and verify compatibility
             model = PPO.load(latest_model_path, env=env, device=device)
+            
+            # Test compatibility
+            test_obs = env.observation_space.sample()
+            model.predict(test_obs)
+            
+            print("✅ Model compatibility verified")
             print("[OK] Existing model loaded successfully")
             return model
+            
         except Exception as e:
-            print(f"[WARNING] Could not load existing model: {e}")
+            print(f"⚠️ Could not load existing model: {e}")
             print("Creating new model instead...")
     
     print("🆕 Creating new PPO model...")
@@ -346,7 +355,7 @@ def train_agent(config: Dict[str, Any]):
     callbacks = []
     
     # Main training callback
-    training_callback = EnhancedTrainingCallback(verbose=1, save_freq=10000)
+    training_callback = TrainingCallback(verbose=1, save_freq=10000)
     callbacks.append(training_callback)
     
     # Checkpoint callback
@@ -482,7 +491,7 @@ def test_configuration(config: Dict[str, Any]) -> bool:
         for i in range(60):  # 10 seconds at ~60 FPS
             action = env.action_space.sample()  # Random action
             obs, reward, done, truncated, info = env.step(action)
-            time.sleep(0.16)
+            time.sleep(0.016)
             
             if i % 30 == 0:
                 print(f"Step {i}: Combo={info.get('current_combo', 0)}, "
