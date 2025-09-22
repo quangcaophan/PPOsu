@@ -1,33 +1,23 @@
 import os
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 import torch
 import time
-import numpy as np
-from collections import deque
-import json
 from game_env import OsuManiaEnv
-import warnings
-warnings.simplefilter(action='ignore', category=FutureWarning)
+import json
 
 class TrainingLogCallback(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
-        self.episode_rewards = deque(maxlen=100)
-        self.episode_ocr_accuracies = deque(maxlen=100)
-        self.episode_combos = deque(maxlen=100)
 
     def _on_step(self) -> bool:
         if 'episode' in self.locals['infos'][0]:
             info = self.locals['infos'][0]
             ep_info = info['episode']
-            
-            self.episode_rewards.append(ep_info['r'])
-            self.episode_ocr_accuracies.append(info.get('ocr_accuracy', 0) * 100)
-            self.episode_combos.append(info.get('current_combo', 0))
-
             print(f"Episode Done -> Reward: {ep_info['r']:.2f}, OCR Acc: {info.get('ocr_accuracy', 0)*100:.1f}%, Combo: {info.get('current_combo', 0)}")
         return True
 
@@ -45,9 +35,16 @@ def train_agent(config: dict):
     print(f"🚀 Using device: {device.upper()}")
     os.makedirs("models", exist_ok=True)
     os.makedirs("checkpoints", exist_ok=True)
-    
+    os.makedirs("logs", exist_ok=True) 
+
     env = OsuManiaEnv(play_area=config.get('play_area'), show_window=True, config_file="osu_config.json")
-    
+    eval_env = OsuManiaEnv(play_area=config.get('play_area'), show_window=False, config_file="osu_config.json")
+
+    template_path = "template/result_template.png"
+    if os.path.exists(template_path):
+        env.load_result_template(template_path)
+        eval_env.load_result_template(template_path)
+
     model_path = "models/latest_model.zip"
     if os.path.exists(model_path):
         print(f"🔄 Loading existing model from {model_path}")
@@ -56,7 +53,23 @@ def train_agent(config: dict):
         print("🆕 Creating a new PPO model...")
         model = PPO("CnnPolicy", env, verbose=1, device=device, tensorboard_log="./tensorboard_logs/")
 
-    checkpoint_callback = CheckpointCallback(save_freq=25000, save_path="checkpoints/", name_prefix="osu_checkpoint")
+    callbacks = [
+        TrainingLogCallback(),
+        CheckpointCallback(
+            save_freq=25000, 
+            save_path="checkpoints/", 
+            name_prefix="osu_checkpoint"
+        ),
+        EvalCallback(
+            eval_env, 
+            best_model_save_path='./models/best_model/', 
+            log_path='./logs/', 
+            eval_freq=50000, 
+            n_eval_episodes=5, 
+            deterministic=True,
+            render=False
+        )
+    ]
     
     total_timesteps = 1_000_000
     print(f"\n🏁 Starting training for {total_timesteps:,} timesteps.")
@@ -65,7 +78,7 @@ def train_agent(config: dict):
     try:
         model.learn(
             total_timesteps=total_timesteps,
-            callback=[TrainingLogCallback(), checkpoint_callback],
+            callback=callbacks, 
             reset_num_timesteps=False,
             progress_bar=True
         )
@@ -75,6 +88,7 @@ def train_agent(config: dict):
         print("\n⏹️ Training interrupted. Model saved.")
     finally:
         env.close()
+        eval_env.close() 
 
 def main():
     config = load_config()

@@ -35,23 +35,18 @@ class OsuManiaEnv(gym.Env):
         self.action_space = spaces.Discrete(2**self.num_keys)
         self.observation_space = spaces.Box(low=0, high=255, shape=(4, FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
         
-        # State & Performance Tracking
         self.last_four_frames = np.zeros((4, FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
         self.previous_keys_state = [False] * self.num_keys
         self.frame_buffer = deque(maxlen=10)
         self.step_count = 0
         self.max_steps = 15000
         
-        # OCR Data
         self.last_combo, self.prev_combo = 0, 0
         self.last_score, self.last_accuracy = 0, 1.0
-        self.combo_history = deque(maxlen=10)
         
-        # Game State
         self.last_activity_time = time.time()
         self.user_quit = False
         self.activity_score = 0.0
-        
         self.result_template = None
         self.game_ended_frames = 0
 
@@ -59,18 +54,14 @@ class OsuManiaEnv(gym.Env):
         try:
             with open(config_file, 'r') as f: return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
-            print(f"Warning: Could not load {config_file}. Using defaults.")
             return {}
 
     def load_result_template(self, template_path: str):
-        """Tải và xử lý template của màn hình kết quả."""
         try:
             template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
             if template is not None:
                 self.result_template = cv2.resize(template, (FRAME_SIZE, FRAME_SIZE))
-                print(f"✅ Result screen template loaded successfully from {template_path}")
-            else:
-                print(f"⚠️ Warning: Could not load template from {template_path}")
+                print(f"✅ Result screen template loaded from {template_path}")
         except Exception as e:
             print(f"❌ Error loading result template: {e}")
 
@@ -123,21 +114,13 @@ class OsuManiaEnv(gym.Env):
                 if np.max(res) > 0.8:
                     self.game_ended_frames += 1
                     if self.game_ended_frames > 5:
-                        print("Result screen detected. Ending episode.")
                         return True
                 else:
                     self.game_ended_frames = 0
-            except cv2.error:
-                pass
+            except cv2.error: pass
 
-        if self.user_quit:
-            print("User requested quit.")
-            return True
-            
-        if time.time() - self.last_activity_time > 20.0 and self.last_combo == 0:
-            print("Inactivity timeout. Resetting.")
-            return True
-            
+        if self.user_quit: return True
+        if time.time() - self.last_activity_time > 20.0 and self.last_combo == 0: return True
         return False
 
     def _execute_action_safely(self, action_combo):
@@ -156,7 +139,6 @@ class OsuManiaEnv(gym.Env):
             self.last_combo = self._read_ocr_value(self.combo_area, "int") or self.last_combo
             self.last_score = self._read_ocr_value(self.score_area, "int") or self.last_score
             self.last_accuracy = self._read_ocr_value(self.accuracy_area, "float") or self.last_accuracy
-            self.combo_history.append(self.last_combo)
         
         self._execute_action_safely(action_combo)
         time.sleep(FRAME_DELAY)
@@ -175,10 +157,9 @@ class OsuManiaEnv(gym.Env):
         
         if self.show_window:
             self._show_enhanced_visualization(new_frame, action_combo, reward)
-        
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            self.user_quit = True
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                cv2.destroyAllWindows()
+                self.user_quit = True
 
         info = {'current_combo': self.last_combo, 'ocr_accuracy': self.last_accuracy}
         return self.last_four_frames.copy(), reward, terminated, truncated, info
@@ -206,11 +187,12 @@ class OsuManiaEnv(gym.Env):
             except: pass
 
         self.user_quit = False
-        self.step_count, self.last_combo, self.prev_combo, self.last_score = 0, 0, 0, 0
+        self.step_count = 0
+        self.last_combo, self.prev_combo, self.last_score = 0, 0, 0
         self.last_accuracy = 1.0
         self.last_activity_time = time.time()
         self.frame_buffer.clear()
-        self.game_ended_frames = 0 # Reset bộ đếm frame
+        self.game_ended_frames = 0
         
         time.sleep(3)
         for i in range(4):

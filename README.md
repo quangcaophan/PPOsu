@@ -123,5 +123,4 @@ This project would not be possible without the following open-source libraries a
 ## What next? 
 - Buy a better gpu to train the agent
 - Build Game Setup Interface for easy to setup
-- Build Game Interface to control the agent and watch the game, metric, whatever
-- Upgrade the agent to play more gamemodes (osu!standard, osu!taiko, osu!catch, osu!mania[4k, 7k])
+- Build Game Interface to control the agent and watch the game, metric,...
