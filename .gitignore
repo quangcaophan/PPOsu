@@ -4,3 +4,6 @@ models/
 _pycache_/
 __pycache__/
 *cpython-310.pyc
+PPO_Osu_0/
+checkpoints/
+tensorboard_logs/
