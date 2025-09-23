@@ -1,0 +1,29 @@
+{
+    "play_area": {
+        "top": 156,
+        "left": 731,
+        "width": 452,
+        "height": 713
+    },
+    "combo_area": {
+        "top": 337,
+        "left": 1460,
+        "width": 150,
+        "height": 41
+    },
+    "score_area": {
+        "top": 216,
+        "left": 1416,
+        "width": 222,
+        "height": 56
+    },
+    "accuracy_area": {
+        "top": 286,
+        "left": 1510,
+        "width": 62,
+        "height": 38
+    },
+    "mode": "mania",
+    "num_keys": 7,
+    "timestamp": "2025-09-23 20:50:16"
+}

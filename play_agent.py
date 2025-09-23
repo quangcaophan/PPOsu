@@ -2,9 +2,9 @@
 Script để chạy agent đã được train để chơi osu! mania
 """
 from stable_baselines3 import PPO
-from game_env import OsuManiaEnv
+from environments.mania_env import OsuManiaEnv
 
-def play_agent(model_path="models/best_osu_model.zip"):
+def play_agent(model_path="models/mania/4k/best_model/best_model.zip"):
     print("=== Osu! Mania AI Player ===")
     
     env = OsuManiaEnv(show_window=True)
@@ -65,4 +65,4 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         play_agent(sys.argv[1])
     else:
-        play_agent(model_path="models/best_model/best_model.zip")
+        play_agent(model_path="models/mania/4k/best_model/best_model.zip")
