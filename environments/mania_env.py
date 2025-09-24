@@ -113,10 +113,22 @@ class OsuManiaEnv(gym.Env):
 
     def _calculate_reward(self):
         reward = 0.0
-        if self.last_combo > self.prev_combo: reward += 1.0 + (self.last_combo * 0.05)
-        elif self.last_combo == 0 and self.prev_combo > 0: reward -= 5.0
         num_keys_pressed = sum(self.previous_keys_state)
-        if self.activity_score < 0.005 and num_keys_pressed > 0: reward -= 0.5 * num_keys_pressed
+        is_gameplay_active = self.activity_score > 0.01
+        # Detect gameplay activity or in lobby
+        if is_gameplay_active:
+            if self.last_combo > self.prev_combo:
+                reward += 1.0 + (self.last_combo * 0.05)
+            elif self.last_combo == 0 and self.prev_combo > 0:
+                reward -= 5.0
+            if num_keys_pressed == 0:
+                reward -= 0.05
+        else:
+            if num_keys_pressed > 0:
+                reward -= 0.5 * num_keys_pressed
+            else:
+                reward += 0.1
+                
         return reward
     
     def _detect_game_activity(self, current_frame):

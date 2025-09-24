@@ -1,29 +1,29 @@
 {
-    "play_area": {
-        "top": 156,
-        "left": 761,
-        "width": 393,
-        "height": 710
-    },
-    "combo_area": {
-        "top": 337,
-        "left": 1457,
-        "width": 155,
-        "height": 38
-    },
-    "score_area": {
-        "top": 216,
-        "left": 1417,
-        "width": 224,
-        "height": 56
-    },
-    "accuracy_area": {
-        "top": 291,
-        "left": 1512,
-        "width": 59,
-        "height": 30
-    },
     "mode": "mania",
     "num_keys": 4,
-    "timestamp": "2025-09-23 20:41:34"
+    "play_area": {
+        "top": 152,
+        "left": 761,
+        "width": 396,
+        "height": 704
+    },
+    "combo_area": {
+        "top": 324,
+        "left": 1449,
+        "width": 161,
+        "height": 56
+    },
+    "score_area": {
+        "top": 208,
+        "left": 1420,
+        "width": 219,
+        "height": 67
+    },
+    "accuracy_area": {
+        "top": 283,
+        "left": 1508,
+        "width": 64,
+        "height": 35
+    },
+    "timestamp": "2025-09-24 22:21:00"
 }
