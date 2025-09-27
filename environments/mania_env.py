@@ -115,21 +115,41 @@ class OsuManiaEnv(gym.Env):
         reward = 0.0
         num_keys_pressed = sum(self.previous_keys_state)
         is_gameplay_active = self.activity_score > 0.01
-        # Detect gameplay activity or in lobby
+
         if is_gameplay_active:
-            if self.last_combo > self.prev_combo:
-                reward += 1.0 + (self.last_combo * 0.05)
-            elif self.last_combo == 0 and self.prev_combo > 0:
+            # 1. MISS
+            if self.last_combo == 0 and self.prev_combo > 10:
                 reward -= 5.0
-            if num_keys_pressed == 0:
-                reward -= 0.05
-        else:
+
+            # 2. HIT
+            score_diff = self.last_score - self.prev_score
+            accuracy_diff = self.last_accuracy - self.prev_accuracy
+
+            if score_diff > 0:
+                if accuracy_diff >= -0.0001:
+                    hit_reward = (0.5 + self.last_combo * 0.01) * self.last_accuracy
+                    reward += hit_reward
+                else:
+                    reward += 0.1 
+                    reward -= abs(accuracy_diff) * 2.0
+
+            # 3. Punish if spam keys
             if num_keys_pressed > 0:
-                reward -= 0.5 * num_keys_pressed
+                reward -= 0.01 * num_keys_pressed
+            else:
+                reward -= 0.05
+
+        else: # Menu
+            if num_keys_pressed > 0:
+                reward -= 0.5
             else:
                 reward += 0.1
-                
+
+        self.prev_score = self.last_score
+        self.prev_accuracy = self.last_accuracy
+
         return reward
+
     
     def _detect_game_activity(self, current_frame):
         if len(self.frame_buffer) < 2: return 0.0
@@ -222,7 +242,7 @@ class OsuManiaEnv(gym.Env):
         self.last_activity_time = time.time()
         self.frame_buffer.clear()
         self.game_ended_frames = 0
-        
+
         time.sleep(3)
         for i in range(4):
             frame = self._get_state()
