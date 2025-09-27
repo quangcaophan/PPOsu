@@ -18,7 +18,7 @@ KEY_MAPPINGS = {
     7: ['s', 'd', 'f', 'space', 'j', 'k', 'l']
 }
 
-FRAME_SIZE = 96
+FRAME_SIZE = 64
 VISUALIZATION_SIZE = 420
 TARGET_FPS = 60
 FRAME_DELAY = 1.0 / TARGET_FPS

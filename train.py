@@ -71,12 +71,24 @@ def train_agent(config_path: str):
         model = PPO.load(latest_model_path, env=env, device=device)
     else:
         print("🆕 Creating a new PPO model...")
-        model = PPO("CnnPolicy", env, verbose=1, device=device, tensorboard_log=tensorboard_log_dir)
+        model = PPO(
+            policy="CnnPolicy",
+            env=env,
+            verbose=1,
+            device=device,
+            tensorboard_log=tensorboard_log_dir,
+            n_steps=512,
+            batch_size=32,
+            ent_coef=0.01,
+            learning_rate=2.5e-4,
+            clip_range=0.2,
+            n_epochs=4
+        )
 
     # 5. Cấu hình Callbacks với các đường dẫn tự động
     callbacks = [
         CheckpointCallback(
-            save_freq=25000, 
+            save_freq=10000, 
             save_path=checkpoint_dir, 
             name_prefix=run_id
         ),
@@ -84,7 +96,7 @@ def train_agent(config_path: str):
             eval_env, 
             best_model_save_path=f"{model_dir}/best_model/", 
             log_path=log_dir, 
-            eval_freq=50000, 
+            eval_freq=5000, 
             n_eval_episodes=5, 
             deterministic=True,
             render=False
@@ -92,7 +104,7 @@ def train_agent(config_path: str):
     ]
     
     # 6. Bắt đầu huấn luyện
-    total_timesteps = 1_000_000
+    total_timesteps = 100_000
     print(f"\n🏁 Starting training for {total_timesteps:,} timesteps.")
     time.sleep(5)
     
