@@ -11,8 +11,8 @@ import time
 import json
 import signal
 import sys
-
-# Try to import performance profiler
+from environments import OsuManiaEnv
+# Try to import performance kd
 try:
     from performance_profiler import profiler, start_profiling, stop_profiling
     PROFILING_AVAILABLE = True
@@ -269,3 +269,40 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# Add these imports to train_optimized.py if not already present
+import logging
+from stable_baselines3.common.logger import configure
+
+# Add this class after other callbacks
+class OCRMonitorCallback(BaseCallback):
+    """Monitor OCR performance during training"""
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.ocr_stats_log = []
+    
+    def _on_step(self) -> bool:
+        # Log OCR stats every 1000 steps
+        if self.num_timesteps % 1000 == 0:
+            info = self.locals.get('infos', [{}])
+            if info and len(info) > 0:
+                ocr_stats = info[0].get('ocr_stats')
+                if ocr_stats:
+                    for area, stats in ocr_stats.items():
+                        self.logger.record(f"ocr/{area}_success_rate", stats['success_rate'])
+                        self.logger.record(f"ocr/{area}_attempts", stats['attempts'])
+                
+                # Also log current values
+                combo = info[0].get('current_combo', 0)
+                score = info[0].get('current_score', 0)
+                accuracy = info[0].get('ocr_accuracy', 0)
+                
+                self.logger.record("env/combo", combo)
+                self.logger.record("env/score", score) 
+                self.logger.record("env/accuracy", accuracy)
+        
+        return True
+
+# Usage in TrainingManager.setup_callbacks():
+# self.callbacks.append(OCRMonitorCallback(verbose=1))

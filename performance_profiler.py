@@ -11,6 +11,7 @@ class PerformanceProfiler:
         self.counters = defaultdict(int)
         self.cpu_usage = deque(maxlen=buffer_size)
         self.memory_usage = deque(maxlen=buffer_size)
+        self.gpu_usage = deque(maxlen=buffer_size)
         self.monitoring = False
         self.monitor_thread = None
         
@@ -46,6 +47,9 @@ class PerformanceProfiler:
                 
                 memory = psutil.virtual_memory()
                 self.memory_usage.append(memory.percent)
+                
+                gpu = psutil.cpu_percent(interval=0.1)
+                self.gpu_usage.append(gpu)
                 
                 time.sleep(0.5)
             except Exception:
@@ -87,6 +91,7 @@ class PerformanceProfiler:
             print(f"\n📊 SYSTEM:")
             print(f"  CPU: Avg {np.mean(self.cpu_usage):.1f}% | Max {np.max(self.cpu_usage):.1f}%")
             print(f"  RAM: Avg {np.mean(self.memory_usage):.1f}% | Max {np.max(self.memory_usage):.1f}%")
+            print(f"  GPU: Avg {np.mean(self.gpu_usage):.1f}% | Max {np.max(self.gpu_usage):.1f}%")
         
         # Timing stats
         stats = self.get_stats()

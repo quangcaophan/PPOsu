@@ -10,96 +10,108 @@ import easyocr
 import json
 from typing import Dict, Any
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor
 import queue
+from performance_profiler import *
+from environments.constants import *
 
-from .constants import *
+from performance_profiler import time_operation
 
 class AsyncOCRManager:
-    """Async OCR Manager để không block main loop"""
+    """Tối ưu hóa: Chụp 1 lần, crop nhiều lần và xử lý song song"""
     def __init__(self):
-        self.ocr_reader = easyocr.Reader(['en'], gpu=True)
-        self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="OCR")
+        self.ocr_reader = easyocr.Reader(['en'], gpu=False)
+        self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="OCR_Worker")
         
-        # Cache kết quả
         self.combo_cache = 0
         self.score_cache = 0
         self.accuracy_cache = 1.0
         
-        # Queue management
-        self.ocr_queue = queue.Queue(maxsize=3)
-        self.last_ocr_time = time.time()
-        
-    def _ocr_worker(self, area, value_type):
-        """OCR worker chạy trong thread riêng"""
-        try:
-            sct = mss.mss()
-            sct_img = sct.grab(area)
-            img = np.array(sct_img)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-            results = self.ocr_reader.readtext(gray, detail=0)
-            
-            for text in results:
-                if value_type == "int":
-                    numbers = re.findall(r'\d+', text.replace(',', ''))
-                    if numbers: return int(numbers[0])
-                elif value_type == "float":
-                    match = re.search(r'(\d+\.?\d*)%?', text)
-                    if match:
-                        acc_val = float(match.group(1))
-                        return acc_val / 100.0 if acc_val > 1 else acc_val
-        except Exception:
-            pass
-        return None
-    
+        self.last_ocr_time = 0
+        self.sct = mss.mss()
+        self.future_ocr = None
+
+    def _ocr_worker(self, image_crop, value_type):
+        """Worker chỉ nhận ảnh đã crop, không tự chụp màn hình"""
+        with time_operation('ocr_recognition'): # Đổi tên để đo riêng phần nhận diện
+            try:
+                gray = cv2.cvtColor(image_crop, cv2.COLOR_BGRA2GRAY)
+                results = self.ocr_reader.readtext(gray, detail=0)
+                
+                for text in results:
+                    if value_type == "int":
+                        numbers = re.findall(r'\d+', text.replace(',', ''))
+                        if numbers: return int(numbers[0])
+                    elif value_type == "float":
+                        match = re.search(r'(\d+\.?\d*)%?', text)
+                        if match:
+                            acc_val = float(match.group(1))
+                            return acc_val / 100.0 if acc_val > 1 else acc_val
+            except Exception:
+                pass
+            return None
+
     def update_async(self, combo_area, score_area, accuracy_area):
-        """Update OCR async nếu đủ thời gian"""
+        """Chỉ bắt đầu tác vụ mới nếu tác vụ cũ đã xong và đủ thời gian trôi qua"""
         current_time = time.time()
         if current_time - self.last_ocr_time < OCR_INTERVAL:
             return
             
+        if self.future_ocr is not None and not self.future_ocr[0].done():
+            return # Tác vụ cũ vẫn đang chạy, bỏ qua lần này
+
         self.last_ocr_time = current_time
         
-        try:
-            if self.ocr_queue.qsize() < 2:
-                future_combo = self.executor.submit(self._ocr_worker, combo_area, "int")
-                future_score = self.executor.submit(self._ocr_worker, score_area, "int") 
-                future_accuracy = self.executor.submit(self._ocr_worker, accuracy_area, "float")
-                
-                self.ocr_queue.put((future_combo, future_score, future_accuracy))
-        except Exception:
-            pass
-    
+        # Xác định vùng ảnh chung cần chụp
+        monitor = {
+            "top": min(combo_area['top'], score_area['top'], accuracy_area['top']),
+            "left": min(combo_area['left'], score_area['left'], accuracy_area['left']),
+            "width": max(combo_area['left'] + combo_area['width'], score_area['left'] + score_area['width'], accuracy_area['left'] + accuracy_area['width']) - min(combo_area['left'], score_area['left'], accuracy_area['left']),
+            "height": max(combo_area['top'] + combo_area['height'], score_area['top'] + score_area['height'], accuracy_area['top'] + accuracy_area['height']) - min(combo_area['top'], score_area['top'], accuracy_area['top']),
+        }
+
+        # Chụp ảnh 1 lần duy nhất
+        with time_operation('ocr_single_grab'):
+            img = np.array(self.sct.grab(monitor))
+
+        # Crop ảnh cho từng khu vực
+        combo_img = img[combo_area['top']-monitor['top'] : combo_area['top']-monitor['top']+combo_area['height'], combo_area['left']-monitor['left'] : combo_area['left']-monitor['left']+combo_area['width']]
+        score_img = img[score_area['top']-monitor['top'] : score_area['top']-monitor['top']+score_area['height'], score_area['left']-monitor['left'] : score_area['left']-monitor['left']+score_area['width']]
+        acc_img = img[accuracy_area['top']-monitor['top'] : accuracy_area['top']-monitor['top']+accuracy_area['height'], accuracy_area['left']-monitor['left'] : accuracy_area['left']-monitor['left']+accuracy_area['width']]
+        
+        # Gửi 3 tác vụ xử lý song song với ảnh đã được crop
+        f_combo = self.executor.submit(self._ocr_worker, combo_img, "int")
+        f_score = self.executor.submit(self._ocr_worker, score_img, "int") 
+        f_acc = self.executor.submit(self._ocr_worker, acc_img, "float")
+        
+        self.future_ocr = (f_combo, f_score, f_acc)
+
     def get_latest_values(self):
-        """Lấy kết quả OCR mới nhất (non-blocking)"""
-        try:
-            while not self.ocr_queue.empty():
-                future_combo, future_score, future_accuracy = self.ocr_queue.get_nowait()
-                
-                if future_combo.done():
-                    result = future_combo.result()
-                    if result is not None:
-                        self.combo_cache = result
-                        
-                if future_score.done():
-                    result = future_score.result()
-                    if result is not None:
-                        self.score_cache = result
-                        
-                if future_accuracy.done():
-                    result = future_accuracy.result()
-                    if result is not None:
-                        self.accuracy_cache = result
-                        
-        except queue.Empty:
-            pass
+        """Lấy kết quả từ future nếu đã hoàn thành"""
+        if self.future_ocr and self.future_ocr[0].done():
+            f_combo, f_score, f_acc = self.future_ocr
+            try:
+                combo_res = f_combo.result()
+                if combo_res is not None: self.combo_cache = combo_res
+            except Exception: pass
+            
+            try:
+                score_res = f_score.result()
+                if score_res is not None: self.score_cache = score_res
+            except Exception: pass
+
+            try:
+                acc_res = f_acc.result()
+                if acc_res is not None: self.accuracy_cache = acc_res
+            except Exception: pass
+
+            self.future_ocr = None # Đánh dấu là đã lấy kết quả
             
         return self.combo_cache, self.score_cache, self.accuracy_cache
     
     def shutdown(self):
-        """Cleanup resources"""
         self.executor.shutdown(wait=False)
+
 
 class OsuManiaEnv(gym.Env):
     """
@@ -183,18 +195,19 @@ class OsuManiaEnv(gym.Env):
 
     def _get_state(self):
         """Optimized state capture"""
-        try:
-            frame_start = time.time()
-            sct_img = self.sct.grab(self.play_area)
-            img = np.array(sct_img)
-            gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
-            resized = cv2.resize(gray, (FRAME_SIZE, FRAME_SIZE))
-            
-            # Performance tracking
-            self.frame_times.append(time.time() - frame_start)
-            return resized
-        except Exception:
-            return np.zeros((FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
+        with time_operation('env_get_state'):
+            try:
+                frame_start = time.time()
+                sct_img = self.sct.grab(self.play_area)
+                img = np.array(sct_img)
+                gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+                resized = cv2.resize(gray, (FRAME_SIZE, FRAME_SIZE))
+                
+                # Performance tracking
+                self.frame_times.append(time.time() - frame_start)
+                return resized
+            except Exception:
+                return np.zeros((FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
 
     def _calculate_reward(self):
         """Optimized reward calculation"""
@@ -319,11 +332,12 @@ class OsuManiaEnv(gym.Env):
             time.sleep(FRAME_DELAY - elapsed)
 
         info = {
-            'current_combo': self.last_combo, 
-            'ocr_accuracy': self.last_accuracy,
+            'combo': self.last_combo if self.last_combo is not None else self.prev_combo,
+            'score': self.last_score if self.last_score is not None else self.prev_score,
+            'accuracy': self.last_accuracy if self.last_accuracy is not None else self.prev_accuracy,
             'fps': 1.0 / max(time.time() - step_start, 0.001)
         }
-        
+
         return self.last_four_frames.copy(), reward, terminated, truncated, info
 
     def _show_visualization(self, frame, action_combo, reward, step_start):
@@ -357,6 +371,9 @@ class OsuManiaEnv(gym.Env):
             cv2.putText(vis_frame, text, (10, y + i*h), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
         cv2.putText(vis_frame, "Press 'q' to quit", (10, VISUALIZATION_SIZE - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+        ocr_status = f"OCR Updated: {time.time() - self.ocr_manager.last_ocr_time:.1f}s ago"
+        cv2.putText(vis_frame, ocr_status, (10, y + 7*h), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 255), 2)
+
         cv2.imshow(f'Osu! Mania AI - {self.num_keys}K', vis_frame)
 
     def reset(self, seed=None, options=None):

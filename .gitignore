@@ -1,5 +1,5 @@
 logs/
-*.backup_20250920*
+*backup_*
 models/
 _pycache_/
 __pycache__/

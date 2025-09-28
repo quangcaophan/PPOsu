@@ -97,7 +97,6 @@ class OsuSetupTool:
             cv2.imshow("Template Preview", gray_template); cv2.waitKey(0); cv2.destroyAllWindows()
         except Exception as e: print(f"❌ Error capturing template: {e}")
 
-    # <<< KHÔI PHỤC LẠI HÀM test_capture_performance
     def test_capture_performance(self):
         if not self.config.get('play_area'):
             print("❌ Play area must be set first!")
@@ -121,7 +120,6 @@ class OsuSetupTool:
             if cv2.waitKey(1) & 0xFF == ord('q'): break
         cv2.destroyAllWindows()
 
-    # <<< KHÔI PHỤC LẠI HÀM test_ocr_areas
     def test_ocr_areas(self):
         if not all(self.config.get(k) for k in ['play_area', 'combo_area', 'score_area', 'accuracy_area']):
             print("❌ All areas must be set before testing OCR.")

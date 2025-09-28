@@ -18,7 +18,7 @@ TARGET_FPS = 60
 FRAME_DELAY = 1.0 / TARGET_FPS  # 0.016667 seconds
 
 # OCR and performance settings
-OCR_INTERVAL = 0.25  # OCR every 250ms for better performance
+OCR_INTERVAL = 1  # OCR every 1 second for better performance
 MAX_STEPS_DEFAULT = 15000
 ACTIVITY_THRESHOLD = 0.005
 GAME_END_TIMEOUT = 20.0
