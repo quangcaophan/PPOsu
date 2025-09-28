@@ -1,126 +1,104 @@
-# OsuMania PPO Agent
+# Osu! RAM-Reading Bot (That Runs Smooth AF!)
 
-This project presents a sophisticated AI agent that learns to play the rhythm game *osu\! mania* using Reinforcement Learning (RL). The agent is built upon Proximal Policy Optimization (PPO) and leverages Optical Character Recognition (OCR) for a more robust and intelligent reward system.
+Alright, so here's the deal: this is an AI I coded to teach itself how to shred osu! mania. At its core, it's a pretty smart AI called PPO. But the real magic trick is that instead of slowly "staring" at the screen, it hacks straight into the game's brain (we're talkin' RAM) to grab the combo, score, and accuracy. The speed is just insane, way more efficient than the old way, and lets you train this beast without a monster PC!
 
-## 🌟 Features
+## 🌟 The Cool Stuff
+- Big Brain AI: It uses PPO from stable-baselines3. In normal-people-speak, this AI is smart because it learns steadily and doesn't just randomly change its strategy, so it doesn't "forget" what it's already mastered. It learns properly, not like some dumb bot that just spams keys.
 
-  * **Advanced RL Agent**: Utilizes Proximal Policy Optimization (PPO) from `stable-baselines3` for efficient and stable learning.
-  * **OCR-Powered Rewards**: The agent's rewards are not just based on in-game events but are calculated by reading the combo, score, and accuracy directly from the screen using EasyOCR. This allows for a more nuanced and human-like learning process.
-  * **Automated Setup and Calibration**: A comprehensive `setup_calibration.py` script allows for easy, interactive, and precise calibration of the play area, combo, score, and accuracy regions on the screen.
-  * **Real-time Visualization**: The `game_env.py` provides a real-time visualization of the agent's view, actions, and key metrics like reward, combo, and OCR-read accuracy, offering valuable insights into the learning process.
-  * **GPU Acceleration**: The training script supports both NVIDIA (CUDA) and AMD (DirectML) GPUs for accelerated training.
-  * **Detailed Monitoring and Callbacks**: The training process is enhanced with custom callbacks for detailed logging, performance tracking, and model checkpointing.
+- Blazing Fast: Reads straight from RAM, no questions asked! We're ditching the laggy, resource-hogging OCR. Game info gets updated almost instantly (sub-1ms). This means the training FPS goes through the roof! Higher FPS means the bot learns way faster and gets more practice in the same amount of time.
+
+- Super Optimized: This whole project was built with one goal in mind: RUN FAST and LIGHT. I wanted it to work even on potatoes, so everything is optimized to cut down on system load.
+
+- Live Bot Showcase: A window pops up so you can watch what the AI is "seeing" in real-time. You'll see the key presses light up and the combo/score numbers dance around. It's pretty fun watching it go from a total noob spamming keys to a legit pro.
+
+- GPU Powered: Of course! All the heavy number-crunching for the neural network gets tossed to your graphics card, leaving the CPU free to handle other stuff.
+
+- Pro-Level Training: It auto-saves the model constantly. So, if the power goes out or your PC crashes mid-training, you don't lose all your progress. It also has full TensorBoard logs so you can track how it's doing, which is pretty neat.
+
+## 💥 The Performance Saga: The Epic Pivot from OCR to RAM Reading
+Okay, let me tell you about the performance drama. This was a whole journey.
+
+### The Big Problem at First
+- Resource Wars: At first, I was using OCR to read the numbers on the screen. Turns out, the AI (PPO) and the OCR were like two hungry hippos fighting over the same GPU resources. Imagine two huge dudes trying to eat the same tiny cake—nobody wins. My computer was crying for help.
+
+- Nosediving FPS: The result was that the OCR was slow as a snail, taking about ~300ms just for one recognition. That's a third of a second! This dragged the entire program down to a pathetic ~3 FPS. You can't train anything at that speed; it's not even a game anymore, it's a slideshow. How is a bot supposed to learn timing when the frames it sees are choppy and delayed by half a beat? Impossible!
+
+- A performance report showing the OCR process hogging all the processing time. It was the weak link, for sure.
+
+### The Game-Changer: Reading RAM!
+So, I got fed up and decided to start a revolution: I completely ditched OCR for reading in-game stats. Now, I use Pymem to read directly from the game's RAM. It's like plugging a straw directly into the game's brain to suck out the data, no middleman needed.
+
+And the result was a massive explosion! By getting rid of that dead weight, the performance bottleneck was completely solved. Now, the program's speed is only limited by screen capture (which is super fast) and the AI's calculations (also super fast on a GPU). The training is smooth, efficient, and actually works!
 
 ## 🔧 How It Works
+It's pretty simple to understand, it's got a few main steps:
 
-The agent operates by capturing screen frames of the *osu\! mania* gameplay. These frames are processed and fed into a Convolutional Neural Network (CNN) as the agent's "eyes". The PPO algorithm then determines the optimal action (which keys to press) based on this visual input.
+1. "Seeing" the Game: The bot takes a screenshot of the note highway. Then, it feeds this image into a CNN (think of it as the robot's eyeball). The CNN learns to tell which pixels are notes and which are just the background.
 
-The reward system, a crucial component of RL, is what makes this project unique. Instead of relying on simplistic reward mechanisms, the agent uses EasyOCR to read the game's UI elements in real-time. This allows for a more sophisticated reward function that considers:
+2. Making a Decision: Based on what it "sees," the AI calculates the best possible key combination to press at that exact moment.
 
-  * **Combo Increases/Breaks**: The agent is rewarded for increasing its combo and penalized for breaking it.
-  * **Score Differentials**: The agent is rewarded for increases in the score.
-  * **Accuracy**: The agent's reward is multiplied by its accuracy, incentivizing precise timing.
+3. Getting the Results (The Secret Sauce!): Right after pressing the keys, instead of waiting for OCR, it instantly peeks into the game's memory to pull out the combo, score, and accuracy (in under 1ms). It's like it has a telepathic link with the game.
 
-This OCR-based approach leads to more intelligent and human-like gameplay from the trained agent.
+4. Reward/Punish and Learn: Thanks to the instant feedback, it knows immediately if it did a good job. A good hit earns a reward, a miss gets a penalty. This "action -> result -> reward/punishment" loop happens incredibly fast, helping the AI develop a much better sense of rhythm and timing.
 
-## 📋 Requirements
+## 📋 Stuff You Need to Install
+- stable-baselines3[extra]==2.1.0
+- torch>=2.0.0
+- gymnasium>=0.28.0
+- opencv-python>=4.8.0
+- mss>=9.0.1
+- numpy>=1.24.0
+- pydirectinput>=1.0.4
+- pymem>=1.13.0
+- tensorboard>=2.1.0
 
-The project's dependencies are listed in the `requirements.txt` file and include:
-
-  * `stable-baselines3[extra]==2.1.0`
-  * `torch>=2.0.0`
-  * `gymnasium>=0.28.0`
-  * `opencv-python>=4.8.0`
-  * `mss>=9.0.1`
-  * `numpy>=1.24.0`
-  * `easyocr>=1.7.0`
-  * `pydirectinput>=1.0.4`
-  * `tensorboard>=2.13.0`
-
-For AMD GPU support, `torch-directml` is also required.
-
-## 🚀 Getting Started
-
-### 1\. Installation
-
-Clone the repository and install the required packages:
-
-```bash
-git clone https://github.com/your-username/OsuMania-PPO-EasyOCR.git
-cd OsuMania-PPO-EasyOCR
+## 🚀 Let's Get This Party Started
+### Installation
+```git clone [https://github.com/your-username/OsuMania-PPO-Memory-Reader.git](https://github.com/your-username/OsuMania-PPO-Memory-Reader.git)
+cd OsuMania-PPO-Memory-Reader
 pip install -r requirements.txt
 ```
+### Find Memory Pointers (The Most Important Step!)
+- Okay, this part is a bit of a pain, but you only have to do it once, so hang in there! It's like a treasure hunt, and finding it feels awesome.
+  - Download and open Cheat Engine.
+  - Open osu! and attach Cheat Engine to the osu!.exe process.
+  - Use Cheat Engine's scanning features to find the values for Score, Combo, and Accuracy. A good tip is to play a bit to change the numbers, then use "Next Scan" to filter the results.
+  - Once you find the address, you have to find its "pointer path." This is crucial so the address doesn't change every time you restart the game. Just Google "cheat engine find pointer path," and you'll find tons of tutorials.
+  - Open up memory_reader.py and paste the pointer paths you found. Done!
 
-### 2\. Calibration
+### Calibrate Your Play Area
+Even though it reads RAM, the bot still needs to see the play area to know which notes are falling, right?
+- Run this script:
 
-Before you can train the agent, you need to calibrate it to your screen and *osu\! mania* skin. Run the `setup_calibration.py` script:
-
-```bash
+```
 python setup_calibration.py
 ```
 
-This will launch an interactive tool that will guide you through selecting the following areas on your screen:
+- It'll guide you to draw a box around the Play Area and the results screen. EZ!
 
-1.  **Play Area**: The area where the notes fall.
-2.  **Combo Area**: The area where the combo count is displayed.
-3.  **Score Area**: The area where the score is displayed.
-4.  **Accuracy Area**: The area where the accuracy percentage is displayed.
+### Let's Start Training!
+Once everything is set up, just run this command to start training:
+```
+python train_optimized.py --config config/mania_4k_config.json
+```
+A window will pop up showing the bot play. At first, it's gonna look like a drunk guy spamming keys—don't worry, that's just how it learns! Let it run for a while, and you'll see it get better and better. The model will be saved automatically in the models/ folder.
 
-The tool will save these coordinates to an `osu_config.json` file.
-
-### 3\. Training
-
-Once the calibration is complete, you can start training the agent by running the `train.py` script:
-
-```bash
-python train.py
+### 📂 File Structure
+```
+├── environments/          # The custom game environment
+├── config/                # Config files for different key modes
+├── models/                # Saved AI models
+├── templates/             # Result screen image templates
+├── memory_reader.py       # The big boss: reads game RAM
+├── setup_calibration.py   # Tool for screen calibration
+├── train_optimized.py     # The main training script
+├── play_agent.py          # Script to watch the bot play
+└── README.md              # This file right here
 ```
 
-The script will load the configuration from `osu_config.json` and begin the training process. You will see a visualization window showing the agent's view and performance metrics. Models will be saved periodically in the `models/` directory.
+### 📈 Cool Ideas for the Future
+- Auto Pointer Finder: Write a fancy script that can auto-scan the game's memory to find the pointers. That would make the setup way more user-friendly.
 
-### 4\. Playing
+- More Key Modes: The framework is pretty flexible. It's 4K now, but adding 7K, 8K, or whatever would just require a new config file and some minor tweaks.
 
-After training, you can watch your agent play *osu\! mania* by running the `play_agent.py` script and providing the path to your trained model:
-
-```bash
-python play_agent.py models/best_osu_model.zip
-```
-
-## 📂 Project Structure
-
-```
-├── game_env.py            # The custom osu! mania environment for the RL agent.
-├── osu_config.json        # Configuration file for screen coordinates.
-├── play_agent.py          # Script to run a trained agent.
-├── README.md              # This README file.
-├── requirements.txt       # Project dependencies.
-├── setup_calibration.py   # Interactive tool for calibrating screen areas.
-└── train.py               # The main script for training the agent.
-```
-
-## 📈 Future Improvements
-
-  * **Hyperparameter Tuning**: Further optimization of the PPO hyperparameters could lead to faster and more effective learning.
-  * **Multi-key Support**: The current agent is designed for 4K mania, but it could be extended to support other key modes.
-  * **Advanced OCR**: More robust OCR techniques could improve the accuracy of reading the game's UI, especially with different skins.
-
-## 📜 License
-
-This project is licensed under the MIT License. See the `LICENSE` file for more details.
-
-## 🙏 Acknowledgements
-
-This project would not be possible without the following open-source libraries and their contributors:
-
-  * [Stable Baselines3](https://github.com/DLR-RM/stable-baselines3)
-  * [PyTorch](https://pytorch.org/)
-  * [OpenCV](https://opencv.org/)
-  * [EasyOCR](https://github.com/JaidedAI/EasyOCR)
-  * [Gymnasium](https://gymnasium.farama.org/)
-
-
-
-## What next? 
-- Buy a better gpu to train the agent
-- Build Game Setup Interface for easy to setup
-- Build Game Interface to control the agent and watch the game, metric,...
+- Next-Level Rewards: If we could find the memory address for the "Hit Error" (timing deviation), that would be insane! We could teach the bot to aim for MARVELOUS-level accuracy instead of just PERFECT. Then the bot would truly be a god.
