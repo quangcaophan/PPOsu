@@ -11,7 +11,7 @@ import time
 import json
 import signal
 import sys
-from environments import OsuManiaEnv
+from environments.mania_env import OsuManiaEnv
 # Try to import performance kd
 try:
     from performance_profiler import profiler, start_profiling, stop_profiling
@@ -110,7 +110,6 @@ class TrainingManager:
         # File paths
         self.latest_model_path = f"{self.model_dir}/latest_model.zip"
         self.final_model_path = f"{self.model_dir}/final_model.zip"
-        self.template_path = f"{self.template_dir}/result_template.png"
     
     def setup_signal_handlers(self):
         """Setup graceful shutdown"""
@@ -141,17 +140,14 @@ class TrainingManager:
             config_path=self.config_path, 
             show_window=False
         )
-        
-        # Load templates
-        if os.path.exists(self.template_path):
-            self.env.load_result_template(self.template_path)
-            self.eval_env.load_result_template(self.template_path)
-            print(f"✅ Template loaded: {self.template_path}")
     
     def create_model(self):
         """Create or load PPO model"""
         device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"🚀 Device: {device.upper()}")
+
+        training_params = self.config.get("training_params", {})
+        ppo_params = training_params.get("ppo_params", {})
         
         if os.path.exists(self.latest_model_path):
             print(f"🔄 Loading: {self.latest_model_path}")
@@ -159,29 +155,27 @@ class TrainingManager:
         else:
             print("🆕 Creating new PPO model...")
             self.model = PPO(
-                policy="CnnPolicy",
+                policy=training_params.get("policy", "CnnPolicy"),
                 env=self.env,
                 verbose=1,
                 device=device,
                 tensorboard_log=self.tensorboard_dir,
-                n_steps=512,
-                batch_size=32,
-                ent_coef=0.01,
-                learning_rate=2.5e-4,
-                clip_range=0.2,
-                n_epochs=4
+                **ppo_params
             )
     
     def setup_callbacks(self):
         """Setup training callbacks"""
+        training_params = self.config.get("training_params", {})
+        callback_params = training_params.get("callback_params", {})
+
         self.callbacks = [
             AutoSaveCallback(
                 save_path=self.latest_model_path,
-                save_freq=512,
+                save_freq=512, # Keep this frequent for safety
                 verbose=1
             ),
             CheckpointCallback(
-                save_freq=10000,
+                save_freq=callback_params.get("checkpoint_save_freq", 10000),
                 save_path=self.checkpoint_dir,
                 name_prefix=self.run_id
             ),
@@ -189,8 +183,8 @@ class TrainingManager:
                 self.eval_env,
                 best_model_save_path=f"{self.model_dir}/best_model/",
                 log_path=self.log_dir,
-                eval_freq=5000,
-                n_eval_episodes=5,
+                eval_freq=callback_params.get("eval_freq", 5000),
+                n_eval_episodes=callback_params.get("n_eval_episodes", 5),
                 deterministic=True,
                 render=False
             )
@@ -256,7 +250,7 @@ class TrainingManager:
 def main():
     parser = argparse.ArgumentParser(description="Complete osu!mania AI Training")
     parser.add_argument("--config", type=str, required=True, help="Config file path")
-    parser.add_argument("--timesteps", type=int, default=100_000, help="Training timesteps")
+    parser.add_argument("--timesteps", type=int, default=None, help="Override total timesteps from config")
     
     args = parser.parse_args()
     
@@ -266,10 +260,16 @@ def main():
     
     try:
         trainer = TrainingManager(args.config)
+        
+        # Determine timesteps: CLI > config > default
+        timesteps = args.timesteps
+        if timesteps is None:
+            timesteps = trainer.config.get("training_params", {}).get("total_timesteps", 100_000)
+
         trainer.create_environments()
         trainer.create_model()
         trainer.setup_callbacks()
-        trainer.train(args.timesteps)
+        trainer.train(timesteps)
         
     except Exception as e:
         print(f"❌ Failed: {e}")
@@ -311,6 +311,3 @@ class OCRMonitorCallback(BaseCallback):
                 self.logger.record("env/accuracy", accuracy)
         
         return True
-
-# Usage in TrainingManager.setup_callbacks():
-# self.callbacks.append(OCRMonitorCallback(verbose=1))

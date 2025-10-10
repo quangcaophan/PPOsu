@@ -9,7 +9,7 @@ import json
 from typing import Dict, Any
 import pydirectinput
 
-from environments.constants import *
+from environments.constants import KEY_MAPPINGS, FRAME_SIZE, VISUALIZATION_SIZE, FRAME_DELAY
 from performance_profiler import time_operation
 from memory_reader import MemoryReader
 from tracing import JSONTracer
@@ -17,7 +17,7 @@ from tracing import JSONTracer
 
 class OsuManiaEnv(gym.Env):
     """
-    Optimized osu!mania Environment với Async OCR và Performance Optimizations
+    Optimized osu!mania Environment và Performance Optimizations
     """
 
     def __init__(self, config_path: str, show_window=True, run_id: str = "default", log_dir: str = "logs"):
@@ -31,6 +31,15 @@ class OsuManiaEnv(gym.Env):
         # Extract config values
         self.play_area = self.config.get('play_area')
         self.num_keys = self.config.get('num_keys', 4)
+        self.max_steps = self.config.get('max_steps', 15000)
+        
+        # Load reward parameters from config
+        reward_params = self.config.get('reward_params', {})
+        self.miss_penalty = reward_params.get('miss_penalty', -5.0)
+        self.key_spam_penalty = reward_params.get('key_spam_penalty', -0.01)
+        self.idle_penalty = reward_params.get('idle_penalty', -0.05)
+        self.menu_key_penalty = reward_params.get('menu_key_penalty', -0.5)
+        self.menu_idle_reward = reward_params.get('menu_idle_reward', 0.1)
 
         # Setup key mappings
         self.keys = KEY_MAPPINGS.get(self.num_keys)
@@ -49,21 +58,18 @@ class OsuManiaEnv(gym.Env):
         # State variables
         self.last_four_frames = np.zeros((4, FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
         self.previous_keys_state = [False] * self.num_keys
-        self.frame_buffer = deque(maxlen=10)
         self.step_count = 0
-        self.max_steps = MAX_STEPS_DEFAULT
         
         # Game state
         self.last_combo, self.prev_combo = 0, 0
         self.last_score, self.prev_score = 0, 0
         self.last_accuracy, self.prev_accuracy = 1.0, 1.0
+        self.last_hits = {}
+        self.prev_hits = {}
+        self.game_state = 0
         
         # Control variables
-        self.last_activity_time = time.time()
         self.user_quit = False
-        self.activity_score = 0.0
-        self.result_template = None
-        self.game_ended_frames = 0
         
         # Performance tracking
         self.frame_times = deque(maxlen=100)
@@ -86,16 +92,6 @@ class OsuManiaEnv(gym.Env):
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
-    def load_result_template(self, template_path: str):
-        """Load result screen template for game end detection"""
-        try:
-            template = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-            if template is not None:
-                self.result_template = cv2.resize(template, (FRAME_SIZE, FRAME_SIZE))
-                self.log(f"Result template loaded from {template_path}")
-        except Exception as e:
-            self.log(f"Error loading template: {e}", "ERROR")
-
     def _get_state(self):
         """Optimized state capture"""
         with time_operation('env_get_state'):
@@ -113,72 +109,54 @@ class OsuManiaEnv(gym.Env):
                 return np.zeros((FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
 
     def _calculate_reward(self):
-        """Optimized reward calculation"""
+        """
+        Calculates reward based on the change in hit counts.
+        This provides a much more direct signal for the agent to learn from.
+        """
         reward = 0.0
         num_keys_pressed = sum(self.previous_keys_state)
-        is_gameplay_active = self.activity_score > ACTIVITY_THRESHOLD
+        is_gameplay_active = self.game_state == 2 # 2 is the state for "Playing"
 
-        if is_gameplay_active:
-            # Miss penalty
+        if is_gameplay_active and self.prev_hits:
+            # Calculate the difference in hits from the last step
+            hit_diffs = {k: self.last_hits.get(k, 0) - self.prev_hits.get(k, 0) for k in self.last_hits}
+
+            # Assign rewards based on new hits
+            reward += hit_diffs.get('hit_geki', 0) * 3.0  # Highest reward for perfect
+            reward += hit_diffs.get('hit_300', 0) * 2.0
+            reward += hit_diffs.get('hit_100', 0) * 0.5
+            reward += hit_diffs.get('hit_50', 0) * -0.5 # Penalty for 50s
+            reward += hit_diffs.get('miss', 0) * -5.0   # Strong penalty for misses
+
+            # Combo reward
+            if self.last_combo > self.prev_combo:
+                reward += (self.last_combo * 0.01)
+            
+            # Penalty for breaking combo
             if self.last_combo == 0 and self.prev_combo > 10:
-                reward += MISS_PENALTY
-
-            # Hit reward
-            score_diff = self.last_score - self.prev_score
-            accuracy_diff = self.last_accuracy - self.prev_accuracy
-
-            if score_diff > 0:
-                if accuracy_diff >= -0.0001:
-                    hit_reward = (0.5 + self.last_combo * 0.01) * self.last_accuracy
-                    reward += hit_reward
-                else:
-                    reward += 0.1 
-                    reward -= abs(accuracy_diff) * 2.0
+                reward += self.miss_penalty
 
             # Key spam penalty
-            reward += KEY_SPAM_PENALTY * num_keys_pressed if num_keys_pressed > 0 else IDLE_PENALTY
+            reward += self.key_spam_penalty * num_keys_pressed if num_keys_pressed > 0 else self.idle_penalty
         else:
             # Menu state
-            reward += MENU_KEY_PENALTY if num_keys_pressed > 0 else MENU_IDLE_REWARD
+            reward += self.menu_key_penalty if num_keys_pressed > 0 else self.menu_idle_reward
 
-        # Update previous values
+        # Update previous values for the next step
         self.prev_combo = self.last_combo
-        self.prev_score = self.last_score  
+        self.prev_score = self.last_score
         self.prev_accuracy = self.last_accuracy
+        self.prev_hits = self.last_hits.copy()
         
         return reward
 
-    def _detect_game_activity(self, current_frame):
-        """Detect game activity for state management"""
-        if len(self.frame_buffer) < 2: 
-            return 0.0
-        diff = cv2.absdiff(current_frame, self.frame_buffer[-1])
-        activity_score = np.sum(diff > 25) / (FRAME_SIZE * FRAME_SIZE)
-        if activity_score > ACTIVITY_THRESHOLD: 
-            self.last_activity_time = time.time()
-        return activity_score
-
-    def _is_game_ended(self, current_frame) -> bool:
-        """Check if game has ended"""
-        # Template matching
-        if self.result_template is not None:
-            try:
-                res = cv2.matchTemplate(current_frame, self.result_template, cv2.TM_CCOEFF_NORMED)
-                if np.max(res) > 0.8:
-                    self.game_ended_frames += 1
-                    if self.game_ended_frames > 5: 
-                        return True
-                else: 
-                    self.game_ended_frames = 0
-            except cv2.error: 
-                pass
-        
-        # User quit or timeout
-        if self.user_quit: 
-            return True
-        if time.time() - self.last_activity_time > GAME_END_TIMEOUT and self.last_combo == 0: 
-            return True
-        return False
+    def _is_game_ended(self) -> bool:
+        """
+        Check if game has ended based on game state from memory reader.
+        State 7 is the results screen.
+        State 5 is the menu screen.
+        """
+        return self.game_state != 2 or self.user_quit
 
     def _execute_action_safely(self, action_combo):
         """Execute key actions with error handling"""
@@ -207,18 +185,19 @@ class OsuManiaEnv(gym.Env):
         self.last_four_frames = np.roll(self.last_four_frames, -1, axis=0)
         self.last_four_frames[-1] = new_frame
         
-        # 3. Update activity
-        self.activity_score = self._detect_game_activity(new_frame)
-        self.frame_buffer.append(new_frame)
+        # 3. Get game state from RAM
+        game_state = self.memory_reader.get_game_state()
+        self.game_state = game_state.get('game_state')
+        self.last_score = game_state.get('score')
+        self.last_combo = game_state.get('combo')
+        self.last_accuracy = game_state.get('accuracy')
+        self.last_hits = {k: v for k, v in game_state.items() if 'hit' in k or k == 'miss'}
         
-        # 4. Get game state from RAM
-        self.last_score, self.last_combo, self.last_accuracy = self.memory_reader.get_game_state()
-        
-        # 5. Calculate reward
+        # 4. Calculate reward
         reward = self._calculate_reward()
         
-        # 6. Check termination
-        terminated = self._is_game_ended(new_frame)
+        # 5. Check termination
+        terminated = self._is_game_ended()
         truncated = self.step_count >= self.max_steps
         
         # 7. Visualization
@@ -237,7 +216,8 @@ class OsuManiaEnv(gym.Env):
             'combo': self.last_combo if self.last_combo is not None else self.prev_combo,
             'score': self.last_score if self.last_score is not None else self.prev_score,
             'accuracy': self.last_accuracy if self.last_accuracy is not None else self.prev_accuracy,
-            'fps': 1.0 / max(time.time() - step_start, 0.001)
+            'fps': 1.0 / max(time.time() - step_start, 0.001),
+            **self.last_hits
         }
         
         # 9. JSON Tracing
@@ -250,7 +230,7 @@ class OsuManiaEnv(gym.Env):
                 'reward': reward,
                 'terminated': terminated,
                 'truncated': truncated,
-                'activity_score': self.activity_score,
+                'game_state': self.game_state,
                 **info
             }
             self.tracer.log_step(trace_data)
@@ -276,11 +256,12 @@ class OsuManiaEnv(gym.Env):
         info_texts = [
             f"Reward: {reward:.2f}",
             f"Combo: {self.last_combo}",
-            f"Score: {self.last_score}",
             f"Acc: {self.last_accuracy*100:.1f}%",
-            f"FPS: {current_fps:.1f}",
-            f"Avg: {avg_fps:.1f}",
-            f"Mode: {self.num_keys}K"
+            f"Geki: {self.last_hits.get('hit_geki', 0)}",
+            f"300: {self.last_hits.get('hit_300', 0)}",
+            f"100: {self.last_hits.get('hit_100', 0)}",
+            f"50: {self.last_hits.get('hit_50', 0)}",
+            f"Miss: {self.last_hits.get('miss', 0)}"
         ]
         
         for i, text in enumerate(info_texts):
@@ -309,9 +290,8 @@ class OsuManiaEnv(gym.Env):
         self.last_combo, self.prev_combo = 0, 0
         self.last_score, self.prev_score = 0, 0
         self.last_accuracy, self.prev_accuracy = 1.0, 1.0
-        self.last_activity_time = time.time()
-        self.frame_buffer.clear()
-        self.game_ended_frames = 0
+        self.last_hits, self.prev_hits = {}, {}
+        self.game_state = 0
         self.frame_times.clear()
 
         # Start new trace file for the episode
@@ -324,7 +304,6 @@ class OsuManiaEnv(gym.Env):
         for i in range(4):
             frame = self._get_state()
             self.last_four_frames[i] = frame
-            self.frame_buffer.append(frame)
             time.sleep(0.05)
             
         return self.last_four_frames.copy(), {}

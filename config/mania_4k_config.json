@@ -2,28 +2,35 @@
     "mode": "mania",
     "num_keys": 4,
     "play_area": {
-        "top": 152,
-        "left": 761,
-        "width": 396,
-        "height": 704
+        "top": 156,
+        "left": 758,
+        "width": 401,
+        "height": 684
     },
-    "combo_area": {
-        "top": 324,
-        "left": 1449,
-        "width": 161,
-        "height": 56
+    "reward_params": {
+        "miss_penalty": -5.0,
+        "key_spam_penalty": -0.01,
+        "idle_penalty": -0.05,
+        "menu_key_penalty": -0.5,
+        "menu_idle_reward": 0.1
     },
-    "score_area": {
-        "top": 208,
-        "left": 1420,
-        "width": 219,
-        "height": 67
+    "max_steps": 15000,
+    "training_params": {
+        "policy": "CnnPolicy",
+        "total_timesteps": 100000,
+        "ppo_params": {
+            "n_steps": 512,
+            "batch_size": 32,
+            "ent_coef": 0.01,
+            "learning_rate": 0.00025,
+            "clip_range": 0.2,
+            "n_epochs": 4
+        },
+        "callback_params": {
+            "checkpoint_save_freq": 10000,
+            "eval_freq": 5000,
+            "n_eval_episodes": 5
+        }
     },
-    "accuracy_area": {
-        "top": 283,
-        "left": 1508,
-        "width": 64,
-        "height": 35
-    },
-    "timestamp": "2025-09-24 22:21:00"
+    "timestamp": "2025-10-10 15:54:20"
 }

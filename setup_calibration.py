@@ -10,8 +10,8 @@ import time
 import json
 from typing import Dict, Optional
 from collections import deque
+from environments.constants import FRAME_SIZE
 
-FRAME_SIZE = 96
 
 class OsuSetupTool:
     def __init__(self):
@@ -77,25 +77,6 @@ class OsuSetupTool:
             elif key == ord('r'): self.start_point, self.end_point = (-1, -1), (-1, -1)
             elif key == ord('q'): print("Selection cancelled."); cv2.destroyWindow(window_name); return None
 
-    def capture_result_template(self, mode_name: str, key_mode: Optional[int] = None):
-        print("\n--- Result Screen Template Capture ---")
-        print("1. In osu!, finish a song to get to the result screen.")
-        print("2. IMPORTANT: Select a small, STATIC area on the result screen (e.g., a button, a corner).")
-        
-        template_area = self._interactive_area_selection("Result Screen Template")
-        if not template_area: print("❌ Template capture cancelled."); return
-
-        try:
-            img = np.array(self.sct.grab(template_area))
-            gray_template = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-            template_dir = f"templates/{mode_name}" + (f"_{key_mode}k" if key_mode else "")
-            os.makedirs(template_dir, exist_ok=True)
-            path = f"{template_dir}/result_template.png"
-            cv2.imwrite(path, gray_template)
-            print(f"✅ Result template saved to {path}")
-            cv2.imshow("Template Preview", gray_template); cv2.waitKey(0); cv2.destroyAllWindows()
-        except Exception as e: print(f"❌ Error capturing template: {e}")
-
     def test_capture_performance(self):
         if not self.config.get('play_area'):
             print("❌ Play area must be set first!")
@@ -121,6 +102,34 @@ class OsuSetupTool:
 
     def save_configuration(self, filename: str):
         if not self.config.get('play_area'): print("❌ Cannot save, play area is not set."); return
+        
+        # Add default reward and training params to ensure a complete config file
+        self.config['reward_params'] = {
+            "miss_penalty": -5.0,
+            "key_spam_penalty": -0.01,
+            "idle_penalty": -0.05,
+            "menu_key_penalty": -0.5,
+            "menu_idle_reward": 0.1
+        }
+        self.config['max_steps'] = 15000
+        self.config['training_params'] = {
+            "policy": "CnnPolicy",
+            "total_timesteps": 100000,
+            "ppo_params": {
+                "n_steps": 512,
+                "batch_size": 32,
+                "ent_coef": 0.01,
+                "learning_rate": 0.00025,
+                "clip_range": 0.2,
+                "n_epochs": 4
+            },
+            "callback_params": {
+                "checkpoint_save_freq": 10000,
+                "eval_freq": 5000,
+                "n_eval_episodes": 5
+            }
+        }
+        
         self.config['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
         with open(filename, 'w') as f: json.dump(self.config, f, indent=4)
         print(f"\n✅ Configuration successfully saved to {filename}")
@@ -163,9 +172,6 @@ class OsuSetupTool:
             self.config['play_area'] = play_area
         else:
             print(f"❌ Setup cancelled. Aborting."); return
-
-        if input("\nCapture result screen template? (y/n): ").lower() == 'y':
-            self.capture_result_template(mode_name, key_mode)
             
         print("\n--- Final Testing ---")
         self.test_capture_performance()

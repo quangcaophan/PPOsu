@@ -7,3 +7,5 @@ __pycache__/
 PPO_Osu_0/
 checkpoints/
 tensorboard_logs/
+.vscode/
+.gitignore

@@ -16,23 +16,23 @@ import_errors = []
 
 print("🔧 Loading osu!mania environments...")
 
-# 1. Try AsyncOsuManiaEnv (best performance) 
+# 1. Try OsuManiaEnv (best performance) 
 try:
-    from .mania_env_async import OsuManiaEnv as AsyncOsuManiaEnv
-    OsuManiaEnv = AsyncOsuManiaEnv
-    available_environments.append("AsyncOsuManiaEnv")
-    print("   ✅ AsyncOsuManiaEnv loaded successfully")
+    from .mania_env import OsuManiaEnv as OsuManiaEnv
+    OsuManiaEnv = OsuManiaEnv
+    available_environments.append("OsuManiaEnv")
+    print("   ✅ OsuManiaEnv loaded successfully")
 except ImportError as e:
-    import_errors.append(f"AsyncOsuManiaEnv: {e}")
-    print(f"   ❌ AsyncOsuManiaEnv failed: {e}")
+    import_errors.append(f"OsuManiaEnv: {e}")
+    print(f"   ❌ OsuManiaEnv failed: {e}")
 except Exception as e:
-    import_errors.append(f"AsyncOsuManiaEnv: {e}")
-    print(f"   ❌ AsyncOsuManiaEnv error: {e}")
+    import_errors.append(f"OsuManiaEnv: {e}")
+    print(f"   ❌ OsuManiaEnv error: {e}")
 
 # 2. Try Original as fallback
 if OsuManiaEnv is None:
     try:
-        from .mania_env_async import OsuManiaEnv as OriginalOsuManiaEnv
+        from .mania_env import OsuManiaEnv as OriginalOsuManiaEnv
         OsuManiaEnv = OriginalOsuManiaEnv
         available_environments.append("OriginalOsuManiaEnv")
         print("   ✅ OriginalOsuManiaEnv loaded as fallback")
@@ -54,7 +54,7 @@ else:
     for error in import_errors:
         print(f"   - {error}")
     print("\n💡 Solutions:")
-    print("   1. Check if mania_env.py or mania_env_async.py exist")
+    print("   1. Check if mania_env.py or mania_env.py exist")
     print("   2. Run: python -c 'from environments.mania_env import OsuManiaEnv'")
     print("   3. Check for syntax errors in environment files")
 

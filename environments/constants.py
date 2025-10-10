@@ -18,21 +18,12 @@ TARGET_FPS = 60
 FRAME_DELAY = 1.0 / TARGET_FPS  # 0.016667 seconds
 
 # OCR and performance settings
-OCR_INTERVAL = 1  # OCR every 1 second for better performance
-MAX_STEPS_DEFAULT = 15000
-ACTIVITY_THRESHOLD = 0.005
-GAME_END_TIMEOUT = 20.0
+OCR_INTERVAL = 0.5  # OCR every 1 second for better performance
+ACTIVITY_THRESHOLD = 0.005 # This is no longer used for game state, but might be useful for other things
 
 # Performance monitoring
 PERFORMANCE_BUFFER_SIZE = 1000
 MONITOR_INTERVAL = 0.5
-
-# Reward system parameters
-MISS_PENALTY = -5.0
-KEY_SPAM_PENALTY = -0.01
-IDLE_PENALTY = -0.05
-MENU_KEY_PENALTY = -0.5
-MENU_IDLE_REWARD = 0.1
 
 # File paths
 DEFAULT_CONFIG_DIR = "config"

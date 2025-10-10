@@ -1,46 +1,51 @@
 import requests
-import time
 
-URL = "http://127.0.0.1:24050/json"
+class MemoryReader:
+    """
+    Reads game state data from the gosumemory JSON endpoint.
+    """
+    def __init__(self, url="http://127.0.0.1:24050/json"):
+        self.url = url
 
-def get_osu_data():
-    try:
-        resp = requests.get(URL, timeout=0.5)
-        data = resp.json()
+    def get_game_state(self):
+        """
+        Fetches the latest game state including score, combo, accuracy, and hit counts.
 
-        # --- Extract các phần cần thiết ---
-        menu = data.get("menu", {})
-        gameplay = data.get("gameplay", {})
+        Returns:
+            dict: A dictionary containing game state data.
+                  Returns a default dictionary if data cannot be fetched.
+        """
+        try:
+            resp = requests.get(self.url, timeout=0.1)
+            data = resp.json()
 
-        result = {
-            # mods
-            "mods": menu.get("mods"),
-            #game mode
-            "game_mode": menu.get("gameMode"),
-            # score
-            "score": gameplay.get("score"),
-            # accuracy
-            "accuracy": gameplay.get("accuracy"),
-            # combo
-            "combo_current": gameplay.get("combo", {}).get("current"),
-            "combo_max": gameplay.get("combo", {}).get("max"),
-            # hits
-            "miss": gameplay.get("hits", {}).get("0"),
-            "hit_50": gameplay.get("hits", {}).get("50"),
-            "hit_100": gameplay.get("hits", {}).get("100"),
-            "hit_300": gameplay.get("hits", {}).get("300"),
-            "hit_geki": gameplay.get("hits", {}).get("geki"),
-            "sliderBreaks": gameplay.get("hits", {}).get("sliderBreaks"),
-        }
+            gameplay = data.get("gameplay", {})
+            menu = data.get("menu", {})
+            hits = gameplay.get("hits", {})
 
-        return result
+            state = {
+                "game_state": menu.get("state", 0), # Default to 0 if not found
+                "score": gameplay.get("score", 0),
+                "combo": gameplay.get("combo", {}).get("current", 0),
+                "accuracy": gameplay.get("accuracy", 100.0) / 100.0,
+                "miss": hits.get("0", 0),
+                "hit_50": hits.get("50", 0),
+                "hit_100": hits.get("100", 0),
+                "hit_300": hits.get("300", 0),
+                "hit_geki": hits.get("geki", 0) # 'geki' is often used for perfect hits in mania
+            }
+            return state
 
-    except Exception as e:
-        print("Error fetching data:", e)
-        return None
-
-
-# --- Loop realtime ---
-while True:
-    data = get_osu_data()
-    time.sleep(0.2)  # poll mỗi 0.2s (~5Hz)
+        except (requests.RequestException, ValueError):
+            # Return default values if osu! is not running, in menu, or data is malformed
+            return {
+                "game_state": 0, # Assuming 0 is a non-play state
+                "score": 0,
+                "combo": 0,
+                "accuracy": 1.0,
+                "miss": 0,
+                "hit_50": 0,
+                "hit_100": 0,
+                "hit_300": 0,
+                "hit_geki": 0
+            }
