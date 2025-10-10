@@ -11,7 +11,6 @@ import json
 from typing import Dict, Optional
 from collections import deque
 
-# Hằng số được đồng bộ với môi trường game
 FRAME_SIZE = 96
 
 class OsuSetupTool:
@@ -120,38 +119,6 @@ class OsuSetupTool:
             if cv2.waitKey(1) & 0xFF == ord('q'): break
         cv2.destroyAllWindows()
 
-    def test_ocr_areas(self):
-        if not all(self.config.get(k) for k in ['play_area', 'combo_area', 'score_area', 'accuracy_area']):
-            print("❌ All areas must be set before testing OCR.")
-            return
-        print("\n--- Testing OCR Areas ---")
-        print("Go play a song in osu! to see live OCR results. Press 'q' to stop.")
-        try:
-            import easyocr
-            reader = easyocr.Reader(['en'], gpu=True)
-        except ImportError:
-            print("❌ EasyOCR not found. Please run: pip install easyocr"); return
-        while True:
-            try:
-                combo_img = np.array(self.sct.grab(self.config['combo_area']))
-                score_img = np.array(self.sct.grab(self.config['score_area']))
-                acc_img = np.array(self.sct.grab(self.config['accuracy_area']))
-                combo_text = reader.readtext(cv2.cvtColor(combo_img, cv2.COLOR_BGRA2GRAY), detail=0)
-                score_text = reader.readtext(cv2.cvtColor(score_img, cv2.COLOR_BGRA2GRAY), detail=0)
-                acc_text = reader.readtext(cv2.cvtColor(acc_img, cv2.COLOR_BGRA2GRAY), detail=0)
-                h, w = 150, 250
-                display = np.zeros((h, w*3, 3), dtype=np.uint8)
-                display[0:100, 0:w] = cv2.resize(cv2.cvtColor(combo_img, cv2.COLOR_BGRA2BGR), (w, 100))
-                display[0:100, w:w*2] = cv2.resize(cv2.cvtColor(score_img, cv2.COLOR_BGRA2BGR), (w, 100))
-                display[0:100, w*2:w*3] = cv2.resize(cv2.cvtColor(acc_img, cv2.COLOR_BGRA2BGR), (w, 100))
-                cv2.putText(display, f"Read: {combo_text}", (10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-                cv2.putText(display, f"Read: {score_text}", (w+10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-                cv2.putText(display, f"Read: {acc_text}", (w*2+10, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-                cv2.imshow("OCR Test", display)
-                if cv2.waitKey(100) & 0xFF == ord('q'): break
-            except Exception: continue
-        cv2.destroyAllWindows()
-
     def save_configuration(self, filename: str):
         if not self.config.get('play_area'): print("❌ Cannot save, play area is not set."); return
         self.config['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -184,27 +151,24 @@ class OsuSetupTool:
             if action == 't':
                 print("\n--- Starting Tests ---")
                 self.test_capture_performance()
-                self.test_ocr_areas()
                 print("✅ Testing complete."); return
             elif action == 'q': return
 
         print(f"\nStarting new setup for osu!{mode_name} {key_mode}K...")
         self.config = {'mode': mode_name, 'num_keys': key_mode}
         
-        setup_steps = [("Play Area", "play_area"), ("Combo Area", "combo_area"), 
-                       ("Score Area", "score_area"), ("Accuracy Area", "accuracy_area")]
-        
-        for name, key in setup_steps:
-            area = self._interactive_area_selection(name)
-            if area: self.config[key] = area
-            else: print(f"❌ Setup cancelled. Aborting."); return
+        # The only required area is the play area for the agent's vision
+        play_area = self._interactive_area_selection("Play Area")
+        if play_area:
+            self.config['play_area'] = play_area
+        else:
+            print(f"❌ Setup cancelled. Aborting."); return
 
         if input("\nCapture result screen template? (y/n): ").lower() == 'y':
             self.capture_result_template(mode_name, key_mode)
             
         print("\n--- Final Testing ---")
         self.test_capture_performance()
-        self.test_ocr_areas()
         
         self.save_configuration(config_filename)
         print("\n🎉 SETUP COMPLETED!")

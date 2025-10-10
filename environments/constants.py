@@ -12,7 +12,7 @@ KEY_MAPPINGS = {
 }
 
 # Frame and visualization settings
-FRAME_SIZE = 64
+FRAME_SIZE = 96
 VISUALIZATION_SIZE = 420
 TARGET_FPS = 60
 FRAME_DELAY = 1.0 / TARGET_FPS  # 0.016667 seconds

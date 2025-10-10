@@ -76,7 +76,7 @@ class TrainingManager:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
             
-            required_fields = ['mode', 'play_area', 'combo_area', 'score_area', 'accuracy_area']
+            required_fields = ['mode', 'play_area', 'num_keys']
             for field in required_fields:
                 if field not in config:
                     raise ValueError(f"Missing required field: {field}")
@@ -131,8 +131,16 @@ class TrainingManager:
         
         print(f"🏗️ Creating environments...")
         
-        self.env = OsuManiaEnv(self.config_path, show_window=True)
-        self.eval_env = OsuManiaEnv(self.config_path, show_window=False)
+        self.env = OsuManiaEnv(
+            config_path=self.config_path, 
+            show_window=True,
+            run_id=self.run_id,
+            log_dir=self.log_dir
+        )
+        self.eval_env = OsuManiaEnv(
+            config_path=self.config_path, 
+            show_window=False
+        )
         
         # Load templates
         if os.path.exists(self.template_path):

@@ -3,122 +3,24 @@ from gymnasium import spaces
 import numpy as np
 import cv2
 import mss
-import pydirectinput
 import time
 from collections import deque
-import easyocr
 import json
 from typing import Dict, Any
-import re
-from concurrent.futures import ThreadPoolExecutor
-import queue
-from performance_profiler import *
+import pydirectinput
+
 from environments.constants import *
-
 from performance_profiler import time_operation
-
-class AsyncOCRManager:
-    """Tối ưu hóa: Chụp 1 lần, crop nhiều lần và xử lý song song"""
-    def __init__(self):
-        self.ocr_reader = easyocr.Reader(['en'], gpu=False)
-        self.executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="OCR_Worker")
-        
-        self.combo_cache = 0
-        self.score_cache = 0
-        self.accuracy_cache = 1.0
-        
-        self.last_ocr_time = 0
-        self.sct = mss.mss()
-        self.future_ocr = None
-
-    def _ocr_worker(self, image_crop, value_type):
-        """Worker chỉ nhận ảnh đã crop, không tự chụp màn hình"""
-        with time_operation('ocr_recognition'): # Đổi tên để đo riêng phần nhận diện
-            try:
-                gray = cv2.cvtColor(image_crop, cv2.COLOR_BGRA2GRAY)
-                results = self.ocr_reader.readtext(gray, detail=0)
-                
-                for text in results:
-                    if value_type == "int":
-                        numbers = re.findall(r'\d+', text.replace(',', ''))
-                        if numbers: return int(numbers[0])
-                    elif value_type == "float":
-                        match = re.search(r'(\d+\.?\d*)%?', text)
-                        if match:
-                            acc_val = float(match.group(1))
-                            return acc_val / 100.0 if acc_val > 1 else acc_val
-            except Exception:
-                pass
-            return None
-
-    def update_async(self, combo_area, score_area, accuracy_area):
-        """Chỉ bắt đầu tác vụ mới nếu tác vụ cũ đã xong và đủ thời gian trôi qua"""
-        current_time = time.time()
-        if current_time - self.last_ocr_time < OCR_INTERVAL:
-            return
-            
-        if self.future_ocr is not None and not self.future_ocr[0].done():
-            return # Tác vụ cũ vẫn đang chạy, bỏ qua lần này
-
-        self.last_ocr_time = current_time
-        
-        # Xác định vùng ảnh chung cần chụp
-        monitor = {
-            "top": min(combo_area['top'], score_area['top'], accuracy_area['top']),
-            "left": min(combo_area['left'], score_area['left'], accuracy_area['left']),
-            "width": max(combo_area['left'] + combo_area['width'], score_area['left'] + score_area['width'], accuracy_area['left'] + accuracy_area['width']) - min(combo_area['left'], score_area['left'], accuracy_area['left']),
-            "height": max(combo_area['top'] + combo_area['height'], score_area['top'] + score_area['height'], accuracy_area['top'] + accuracy_area['height']) - min(combo_area['top'], score_area['top'], accuracy_area['top']),
-        }
-
-        # Chụp ảnh 1 lần duy nhất
-        with time_operation('ocr_single_grab'):
-            img = np.array(self.sct.grab(monitor))
-
-        # Crop ảnh cho từng khu vực
-        combo_img = img[combo_area['top']-monitor['top'] : combo_area['top']-monitor['top']+combo_area['height'], combo_area['left']-monitor['left'] : combo_area['left']-monitor['left']+combo_area['width']]
-        score_img = img[score_area['top']-monitor['top'] : score_area['top']-monitor['top']+score_area['height'], score_area['left']-monitor['left'] : score_area['left']-monitor['left']+score_area['width']]
-        acc_img = img[accuracy_area['top']-monitor['top'] : accuracy_area['top']-monitor['top']+accuracy_area['height'], accuracy_area['left']-monitor['left'] : accuracy_area['left']-monitor['left']+accuracy_area['width']]
-        
-        # Gửi 3 tác vụ xử lý song song với ảnh đã được crop
-        f_combo = self.executor.submit(self._ocr_worker, combo_img, "int")
-        f_score = self.executor.submit(self._ocr_worker, score_img, "int") 
-        f_acc = self.executor.submit(self._ocr_worker, acc_img, "float")
-        
-        self.future_ocr = (f_combo, f_score, f_acc)
-
-    def get_latest_values(self):
-        """Lấy kết quả từ future nếu đã hoàn thành"""
-        if self.future_ocr and self.future_ocr[0].done():
-            f_combo, f_score, f_acc = self.future_ocr
-            try:
-                combo_res = f_combo.result()
-                if combo_res is not None: self.combo_cache = combo_res
-            except Exception: pass
-            
-            try:
-                score_res = f_score.result()
-                if score_res is not None: self.score_cache = score_res
-            except Exception: pass
-
-            try:
-                acc_res = f_acc.result()
-                if acc_res is not None: self.accuracy_cache = acc_res
-            except Exception: pass
-
-            self.future_ocr = None # Đánh dấu là đã lấy kết quả
-            
-        return self.combo_cache, self.score_cache, self.accuracy_cache
-    
-    def shutdown(self):
-        self.executor.shutdown(wait=False)
+from memory_reader import MemoryReader
+from tracing import JSONTracer
 
 
 class OsuManiaEnv(gym.Env):
     """
     Optimized osu!mania Environment với Async OCR và Performance Optimizations
     """
-    
-    def __init__(self, config_path: str, show_window=True):
+
+    def __init__(self, config_path: str, show_window=True, run_id: str = "default", log_dir: str = "logs"):
         super(OsuManiaEnv, self).__init__()
         
         # Load config
@@ -128,9 +30,6 @@ class OsuManiaEnv(gym.Env):
 
         # Extract config values
         self.play_area = self.config.get('play_area')
-        self.combo_area = self.config.get('combo_area')
-        self.score_area = self.config.get('score_area')
-        self.accuracy_area = self.config.get('accuracy_area')
         self.num_keys = self.config.get('num_keys', 4)
 
         # Setup key mappings
@@ -141,7 +40,7 @@ class OsuManiaEnv(gym.Env):
         # Initialize components
         self.sct = mss.mss()
         self.show_window = show_window
-        self.ocr_manager = AsyncOCRManager()
+        self.memory_reader = MemoryReader()
         
         # Gym spaces
         self.action_space = spaces.Discrete(2**self.num_keys)
@@ -168,6 +67,10 @@ class OsuManiaEnv(gym.Env):
         
         # Performance tracking
         self.frame_times = deque(maxlen=100)
+
+        # Debugging
+        if run_id and log_dir:
+            self.tracer = JSONTracer(log_dir=log_dir, run_id=run_id)
         
         self.log(f"Environment initialized for osu!mania {self.num_keys}K mode")
 
@@ -288,7 +191,7 @@ class OsuManiaEnv(gym.Env):
                         pydirectinput.keyUp(self.keys[i])
                 except Exception:
                     pass  # Ignore key errors to prevent crashes
-        self.previous_keys_state = action_combo.copy()
+        self.previous_keys_state = action_combo
 
     def step(self, action):
         """Main step function với full optimization"""
@@ -308,9 +211,8 @@ class OsuManiaEnv(gym.Env):
         self.activity_score = self._detect_game_activity(new_frame)
         self.frame_buffer.append(new_frame)
         
-        # 4. Async OCR
-        self.ocr_manager.update_async(self.combo_area, self.score_area, self.accuracy_area)
-        self.last_combo, self.last_score, self.last_accuracy = self.ocr_manager.get_latest_values()
+        # 4. Get game state from RAM
+        self.last_score, self.last_combo, self.last_accuracy = self.memory_reader.get_game_state()
         
         # 5. Calculate reward
         reward = self._calculate_reward()
@@ -337,6 +239,21 @@ class OsuManiaEnv(gym.Env):
             'accuracy': self.last_accuracy if self.last_accuracy is not None else self.prev_accuracy,
             'fps': 1.0 / max(time.time() - step_start, 0.001)
         }
+        
+        # 9. JSON Tracing
+        if hasattr(self, 'tracer'):
+            trace_data = {
+                'step': self.step_count,
+                'timestamp': time.time(),
+                'action': int(action),
+                'action_combo': action_combo,
+                'reward': reward,
+                'terminated': terminated,
+                'truncated': truncated,
+                'activity_score': self.activity_score,
+                **info
+            }
+            self.tracer.log_step(trace_data)
 
         return self.last_four_frames.copy(), reward, terminated, truncated, info
 
@@ -371,8 +288,6 @@ class OsuManiaEnv(gym.Env):
             cv2.putText(vis_frame, text, (10, y + i*h), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
         cv2.putText(vis_frame, "Press 'q' to quit", (10, VISUALIZATION_SIZE - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
-        ocr_status = f"OCR Updated: {time.time() - self.ocr_manager.last_ocr_time:.1f}s ago"
-        cv2.putText(vis_frame, ocr_status, (10, y + 7*h), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 255), 2)
 
         cv2.imshow(f'Osu! Mania AI - {self.num_keys}K', vis_frame)
 
@@ -399,10 +314,9 @@ class OsuManiaEnv(gym.Env):
         self.game_ended_frames = 0
         self.frame_times.clear()
 
-        # Reset OCR cache
-        self.ocr_manager.combo_cache = 0
-        self.ocr_manager.score_cache = 0
-        self.ocr_manager.accuracy_cache = 1.0
+        # Start new trace file for the episode
+        if hasattr(self, 'tracer'):
+            self.tracer.start_episode()
 
         time.sleep(3)
         
@@ -426,8 +340,8 @@ class OsuManiaEnv(gym.Env):
             except: 
                 pass
                 
-        # Shutdown OCR
-        if hasattr(self, 'ocr_manager'):
-            self.ocr_manager.shutdown()
-            
+        # Close tracer
+        if hasattr(self, 'tracer'):
+            self.tracer.close()
+
         self.log("Environment closed")
