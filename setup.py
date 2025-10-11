@@ -103,14 +103,6 @@ class OsuSetupTool:
     def save_configuration(self, filename: str):
         if not self.config.get('play_area'): print("❌ Cannot save, play area is not set."); return
         
-        # Add default reward and training params to ensure a complete config file
-        self.config['reward_params'] = {
-            "miss_penalty": -5.0,
-            "key_spam_penalty": -0.01,
-            "idle_penalty": -0.05,
-            "menu_key_penalty": -0.5,
-            "menu_idle_reward": 0.1
-        }
         self.config['max_steps'] = 15000
         self.config['training_params'] = {
             "policy": "CnnPolicy",

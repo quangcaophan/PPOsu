@@ -24,10 +24,9 @@ ACTIVITY_THRESHOLD = 0.005 # This is no longer used for game state, but might be
 # Performance monitoring
 PERFORMANCE_BUFFER_SIZE = 1000
 MONITOR_INTERVAL = 0.5
+VIS_SIZE = 280
 
 # File paths
 DEFAULT_CONFIG_DIR = "config"
 DEFAULT_MODEL_DIR = "models"
-DEFAULT_LOG_DIR = "logs"
 DEFAULT_CHECKPOINT_DIR = "checkpoints"
-DEFAULT_TEMPLATE_DIR = "templates"

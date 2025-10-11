@@ -5,52 +5,15 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import argparse
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback, BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback,CheckpointCallback, EvalCallback
 import torch
 import time
 import json
 import signal
 import sys
 from environments.mania_env import OsuManiaEnv
-# Try to import performance kd
-try:
-    from performance_profiler import profiler, start_profiling, stop_profiling
-    PROFILING_AVAILABLE = True
-except ImportError:
-    PROFILING_AVAILABLE = False
 
-class AutoSaveCallback(BaseCallback):
-    """Auto-save model every n_steps and every 5 minutes"""
-    def __init__(self, save_path: str, save_freq: int = 512, verbose: int = 0):
-        super().__init__(verbose)
-        self.save_path = save_path
-        self.save_freq = save_freq
-        self.save_counter = 0
-        self.last_save_time = time.time()
-
-    def _on_step(self) -> bool:
-        self.save_counter += 1
-        current_time = time.time()
-        
-        # Save conditions: step count OR time threshold
-        step_condition = self.save_counter >= self.save_freq
-        time_condition = current_time - self.last_save_time > 300  # 5 minutes
-        
-        if step_condition or time_condition:
-            if self.verbose > 0:
-                reason = "steps" if step_condition else "time"
-                print(f"💾 Auto-saving model at step {self.num_timesteps} ({reason})")
-            
-            try:
-                self.model.save(self.save_path)
-                self.save_counter = 0
-                self.last_save_time = current_time
-                if self.verbose > 0:
-                    print(f"✅ Model saved to {self.save_path}")
-            except Exception as e:
-                print(f"❌ Save failed: {e}")
-                
-        return True
+# ============ TRAINING MANAGER ============
 
 class TrainingManager:
     """Complete training management with cleanup"""
@@ -65,10 +28,6 @@ class TrainingManager:
         # Setup paths
         self.setup_paths()
         self.setup_signal_handlers()
-        
-        # Start profiling
-        if PROFILING_AVAILABLE:
-            start_profiling()
     
     def _load_config(self):
         """Load and validate config"""
@@ -99,8 +58,7 @@ class TrainingManager:
             'model': f"models/{mode}/" + (f"{keys}k/" if keys else ""),
             'log': f"logs/{self.run_id}",
             'checkpoint': f"checkpoints/{self.run_id}",
-            'tensorboard': "tensorboard_logs/",
-            'template': f"templates/{self.run_id}"
+            'tensorboard': "tensorboard_logs/"
         }
         
         for name, path in dirs.items():
@@ -123,18 +81,12 @@ class TrainingManager:
     
     def create_environments(self):
         """Create training environments"""
-        try:
-            from environments import OsuManiaEnv
-        except ImportError:
-            raise ImportError("Could not import OsuManiaEnv. Run migration first!")
-        
         print(f"🏗️ Creating environments...")
         
         self.env = OsuManiaEnv(
             config_path=self.config_path, 
-            show_window=True,
-            run_id=self.run_id,
-            log_dir=self.log_dir
+            show_window=False,
+            run_id=self.run_id
         )
         self.eval_env = OsuManiaEnv(
             config_path=self.config_path, 
@@ -167,26 +119,20 @@ class TrainingManager:
         """Setup training callbacks"""
         training_params = self.config.get("training_params", {})
         callback_params = training_params.get("callback_params", {})
-
         self.callbacks = [
-            AutoSaveCallback(
-                save_path=self.latest_model_path,
-                save_freq=512, # Keep this frequent for safety
-                verbose=1
-            ),
             CheckpointCallback(
                 save_freq=callback_params.get("checkpoint_save_freq", 10000),
                 save_path=self.checkpoint_dir,
-                name_prefix=self.run_id
+                name_prefix=self.run_id,
+                save_freq=512,
+                save_path="models/mania/4k/",
+                name_prefix="latest_model",
             ),
             EvalCallback(
                 self.eval_env,
                 best_model_save_path=f"{self.model_dir}/best_model/",
-                log_path=self.log_dir,
                 eval_freq=callback_params.get("eval_freq", 5000),
-                n_eval_episodes=callback_params.get("n_eval_episodes", 5),
-                deterministic=True,
-                render=False
+                n_eval_episodes=callback_params.get("n_eval_episodes", 5)
             )
         ]
     
@@ -205,6 +151,7 @@ class TrainingManager:
                 callback=self.callbacks,
                 reset_num_timesteps=(not os.path.exists(self.latest_model_path)),
                 progress_bar=True,
+                log_interval=None,
                 tb_log_name=self.run_id
             )
             
@@ -238,13 +185,6 @@ class TrainingManager:
                 except Exception:
                     pass
         
-        # Stop profiling
-        if PROFILING_AVAILABLE:
-            try:
-                stop_profiling()
-            except Exception:
-                pass
-        
         print("✅ Cleanup complete")
 
 def main():
@@ -277,37 +217,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-# Add these imports to train_optimized.py if not already present
-import logging
-from stable_baselines3.common.logger import configure
-
-# Add this class after other callbacks
-class OCRMonitorCallback(BaseCallback):
-    """Monitor OCR performance during training"""
-    def __init__(self, verbose=0):
-        super().__init__(verbose)
-        self.ocr_stats_log = []
-    
-    def _on_step(self) -> bool:
-        # Log OCR stats every 1000 steps
-        if self.num_timesteps % 1000 == 0:
-            info = self.locals.get('infos', [{}])
-            if info and len(info) > 0:
-                ocr_stats = info[0].get('ocr_stats')
-                if ocr_stats:
-                    for area, stats in ocr_stats.items():
-                        self.logger.record(f"ocr/{area}_success_rate", stats['success_rate'])
-                        self.logger.record(f"ocr/{area}_attempts", stats['attempts'])
-                
-                # Also log current values
-                combo = info[0].get('current_combo', 0)
-                score = info[0].get('current_score', 0)
-                accuracy = info[0].get('ocr_accuracy', 0)
-                
-                self.logger.record("env/combo", combo)
-                self.logger.record("env/score", score) 
-                self.logger.record("env/accuracy", accuracy)
-        
-        return True

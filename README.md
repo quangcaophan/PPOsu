@@ -88,7 +88,6 @@ A window will pop up showing the bot play. At first, it's gonna look like a drun
 ├── environments/          # The custom game environment
 ├── config/                # Config files for different key modes
 ├── models/                # Saved AI models
-├── templates/             # Result screen image templates
 ├── memory_reader.py       # The big boss: reads game RAM
 ├── setup_calibration.py   # Tool for screen calibration
 ├── train_optimized.py     # The main training script

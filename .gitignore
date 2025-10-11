@@ -1,11 +1,30 @@
+# Logs and traces
 logs/
+*.log
+
+# Backups
 *backup_*
+
+# Models
 models/
-_pycache_/
-__pycache__/
-*cpython-310.pyc
-PPO_Osu_0/
 checkpoints/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Training outputs
+PPO_Osu_0/
 tensorboard_logs/
+
+# IDE
 .vscode/
-.gitignore
+.idea/
+*.swp
+*.swo
+
+venv/
+env/
+.env

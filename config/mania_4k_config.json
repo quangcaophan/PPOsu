@@ -7,24 +7,17 @@
         "width": 401,
         "height": 684
     },
-    "reward_params": {
-        "miss_penalty": -5.0,
-        "key_spam_penalty": -0.01,
-        "idle_penalty": -0.05,
-        "menu_key_penalty": -0.5,
-        "menu_idle_reward": 0.1
-    },
     "max_steps": 15000,
     "training_params": {
         "policy": "CnnPolicy",
         "total_timesteps": 100000,
         "ppo_params": {
-            "n_steps": 512,
+            "n_steps": 4096,
             "batch_size": 32,
-            "ent_coef": 0.01,
-            "learning_rate": 0.00025,
-            "clip_range": 0.2,
-            "n_epochs": 4
+            "ent_coef": 0.1,
+            "learning_rate": 0.0005,
+            "clip_range": 0.3,
+            "n_epochs": 10
         },
         "callback_params": {
             "checkpoint_save_freq": 10000,
