@@ -90,32 +90,33 @@ The agent operates on a continuous perception-action-reward cycle. Each step in 
 
 ```mermaid
 graph TD
-    subgraph "Phase 1: Perception & State Representation"
-        A[Capture Frame of osu!mania Play Area] --> B["Pre-process Frame (Grayscale, Resize)"];
-        B --> C[Maintain a Stack of the 4 Most Recent Frames];
-        C --> D["Current State 'S' (Observation) is the 4-Frame Stack"];
+    subgraph Phase_1_Perception_and_State_Representation
+        A[Capture Frame of osu!mania Play Area] --> B[Pre-process Frame (Grayscale, Resize)]
+        B --> C[Maintain a Stack of the 4 Most Recent Frames]
+        C --> D[Current State S (Observation) is the 4-Frame Stack]
     end
 
-    subgraph "Phase 2: Policy and Value Estimation"
-        D --> E[Feed State 'S' into Shared CNN Backbone];
-        E --> F["Actor Head: Outputs Policy π(A|S)"];
-        E --> G["Critic Head: Outputs Value V(S)"];
+    subgraph Phase_2_Policy_and_Value_Estimation
+        D --> E[Feed State S into Shared CNN Backbone]
+        E --> F[Actor Head: Outputs Policy π(A|S)]
+        E --> G[Critic Head: Outputs Value V(S)]
     end
 
-    subgraph "Phase 3: Action & Environment Interaction"
-        F --> H["Sample Action 'A' from Policy"];
-        H --> I[Send Key Press/Release Commands to the Game];
-        I --> J[Query gosumemory's Local Server via HTTP/WebSocket];
-        J --> K["Receive New Game State 'S' (Combo, Score, etc)"];
+    subgraph Phase_3_Action_and_Environment_Interaction
+        F --> H[Sample Action A from Policy]
+        H --> I[Send Key Press or Release Commands to the Game]
+        I --> J[Query gosumemory Local Server via HTTP or WebSocket]
+        J --> K[Receive New Game State S' (Combo, Score, etc)]
     end
 
-    subgraph "Phase 4: Reward Calculation & Learning"
-        K --> L["Calculate Reward 'R' based on change in Game State"];
-        L --> M{"Store Transition (S, A, R, S') in Rollout Buffer"};
-        M -- Buffer Full --> N["Calculate Advantage Estimates A(S,A) using GAE"];
-        N --> O[Update Actor & Critic Networks using PPO Clip Objective];
-        O --> A;
+    subgraph Phase_4_Reward_Calculation_and_Learning
+        K --> L[Calculate Reward R based on change in Game State]
+        L --> M[Store Transition (S, A, R, S') in Rollout Buffer]
+        M -- Buffer Full --> N[Calculate Advantage Estimates A(S,A) using GAE]
+        N --> O[Update Actor and Critic Networks using PPO Clip Objective]
+        O --> A
     end
+
 ```
 
 1.  **Visual Perception (Seeing the Game)**: The agent's process begins by capturing the visual state of the note highway. To perceive motion and velocity, it stacks the four most recent frames into a single tensor. This stack is fed into a Convolutional Neural Network (CNN), which acts as a powerful feature extractor, learning to identify notes, their positions, and their patterns of descent.
