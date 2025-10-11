@@ -32,14 +32,14 @@ The agent operates on a continuous perception-action-reward cycle. Each step in 
 
 ```mermaid
 graph TD
-    A[Start] --> B{Capture Screen & Stack 4 Frames};
-    B --> C[Process Frames with CNN for Feature Extraction];
-    C --> D{PPO Model (Actor-Critic) Determines Action};
-    D -- Action Probability --> E[Execute Action in Game (Key Press)];
-    E --> F{Instantly Read Game State from RAM via gosumemory};
-    F -- Combo, Score, Accuracy --> G[Calculate Reward/Penalty];
-    G -- Feedback Signal --> H[Update PPO Model Policy];
-    H --> B;
+    A[Start] --> B{Capture Screen & Stack 4 Frames}
+    B --> C[Process Frames with CNN for Feature Extraction]
+    C --> D[PPO Model - Actor Critic Deterministic Policy]
+    D --> E[Execute Action in Game (Key Press)]
+    E --> F{Instantly Read Game State from RAM via gosumemory}
+    F --> G[Calculate Reward or Penalty]
+    G --> H[Update PPO Model Policy]
+    H --> B
 ```
 
 1.  **Visual Perception (Seeing the Game)**: The agent's process begins by capturing the visual state of the note highway. To perceive motion and velocity, it stacks the four most recent frames into a single tensor. This stack is fed into a Convolutional Neural Network (CNN), which acts as a powerful feature extractor, learning to identify notes, their positions, and their patterns of descent.
