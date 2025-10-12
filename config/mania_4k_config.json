@@ -12,8 +12,8 @@
         "policy": "CnnPolicy",
         "total_timesteps": 100000,
         "ppo_params": {
-            "n_steps": 4096,
-            "batch_size": 32,
+            "n_steps": 512,
+            "batch_size": 64,
             "ent_coef": 0.1,
             "learning_rate": 0.0005,
             "clip_range": 0.3,

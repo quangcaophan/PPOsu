@@ -5,25 +5,72 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import argparse
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback,CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.monitor import Monitor
 import torch
 import time
 import json
 import signal
 import sys
 from environments.mania_env import OsuManiaEnv
+from environments.constants import (
+    MODELS_DIR, LOGS_DIR, CHECKPOINTS_DIR, TENSORBOARD_DIR,
+    LATEST_MODEL_NAME, FINAL_MODEL_NAME, BEST_MODEL_DIR_NAME,
+    DEFAULT_TOTAL_TIMESTEPS, DEFAULT_CHECKPOINT_FREQ,
+    DEFAULT_N_EVAL_EPISODES, DEFAULT_POLICY
+)
+
+# ============ CUSTOM CALLBACK ============
+class SongFinishedEvalCallback(EvalCallback):
+    """
+    A custom callback that triggers an evaluation run whenever a song is finished
+    and the results screen (game_state=7) is reached.
+    """
+    def __init__(self, *args, **kwargs):
+        # Pop eval_freq as it's not used for our trigger mechanism
+        kwargs.pop('eval_freq', None)
+        
+        # Set a dummy eval_freq for the parent class; our logic overrides it.
+        super().__init__(*args, eval_freq=1, **kwargs)
+
+    def _on_step(self) -> bool:
+        # Check if an episode has ended
+        if self.locals["dones"][0]:
+            info = self.locals["infos"][0]
+            
+            # Check if the song was finished (game_state is 7)
+            if info.get("game_state") == 7:
+                if self.verbose > 0:
+                    print("\n🎶 Song finished! Triggering evaluation...")
+                    time.sleep(5) # Give user time to focus the game window
+                
+                # Trick the parent class to run evaluation.
+                # We save and restore n_calls to not affect other callbacks.
+                original_n_calls = self.n_calls
+                self.n_calls = self.eval_freq  # This is 1
+                continue_training = super()._on_step()
+                
+                if self.verbose > 0:
+                    print("🏁 Evaluation complete! Resuming training.")
+
+                self.n_calls = original_n_calls
+                
+                return continue_training
+        
+        return True
 
 # ============ TRAINING MANAGER ============
 
 class TrainingManager:
     """Complete training management with cleanup"""
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, show_eval_window: bool = False):
         self.config_path = config_path
         self.config = self._load_config()
         self.model = None
         self.env = None
         self.eval_env = None
+        self.show_eval_window = show_eval_window
         
         # Setup paths
         self.setup_paths()
@@ -54,11 +101,12 @@ class TrainingManager:
         self.run_id = f"{mode}" + (f"_{keys}k" if keys else "")
         
         # Directories
+        key_str = f"{keys}k" if keys else ""
         dirs = {
-            'model': f"models/{mode}/" + (f"{keys}k/" if keys else ""),
-            'log': f"logs/{self.run_id}",
-            'checkpoint': f"checkpoints/{self.run_id}",
-            'tensorboard': "tensorboard_logs/"
+            'model': os.path.join(MODELS_DIR, mode, key_str),
+            'log': os.path.join(LOGS_DIR, self.run_id),
+            'checkpoint': os.path.join(CHECKPOINTS_DIR, self.run_id),
+            'tensorboard': TENSORBOARD_DIR
         }
         
         for name, path in dirs.items():
@@ -66,8 +114,8 @@ class TrainingManager:
             setattr(self, f"{name}_dir", path)
         
         # File paths
-        self.latest_model_path = f"{self.model_dir}/latest_model.zip"
-        self.final_model_path = f"{self.model_dir}/final_model.zip"
+        self.latest_model_path = os.path.join(self.model_dir, LATEST_MODEL_NAME)
+        self.final_model_path = os.path.join(self.model_dir, FINAL_MODEL_NAME)
     
     def setup_signal_handlers(self):
         """Setup graceful shutdown"""
@@ -83,15 +131,22 @@ class TrainingManager:
         """Create training environments"""
         print(f"🏗️ Creating environments...")
         
+        # Training environment: no auto-restart
         self.env = OsuManiaEnv(
             config_path=self.config_path, 
             show_window=False,
-            run_id=self.run_id
+            run_id=self.run_id,
+            is_eval_env=False
         )
+        self.env = Monitor(self.env)
+
+        # Evaluation environment: will auto-restart songs
         self.eval_env = OsuManiaEnv(
             config_path=self.config_path, 
-            show_window=False
+            show_window=self.show_eval_window,
+            is_eval_env=True
         )
+        self.eval_env = Monitor(self.eval_env)
     
     def create_model(self):
         """Create or load PPO model"""
@@ -107,7 +162,7 @@ class TrainingManager:
         else:
             print("🆕 Creating new PPO model...")
             self.model = PPO(
-                policy=training_params.get("policy", "CnnPolicy"),
+                policy=training_params.get("policy", DEFAULT_POLICY),
                 env=self.env,
                 verbose=1,
                 device=device,
@@ -121,22 +176,18 @@ class TrainingManager:
         callback_params = training_params.get("callback_params", {})
         self.callbacks = [
             CheckpointCallback(
-                save_freq=callback_params.get("checkpoint_save_freq", 10000),
-                save_path=self.checkpoint_dir,
+                save_freq=callback_params.get("checkpoint_save_freq", DEFAULT_CHECKPOINT_FREQ),
                 name_prefix=self.run_id,
-                save_freq=512,
-                save_path="models/mania/4k/",
-                name_prefix="latest_model",
+                save_path=self.model_dir
             ),
-            EvalCallback(
+            SongFinishedEvalCallback(
                 self.eval_env,
-                best_model_save_path=f"{self.model_dir}/best_model/",
-                eval_freq=callback_params.get("eval_freq", 5000),
-                n_eval_episodes=callback_params.get("n_eval_episodes", 5)
+                best_model_save_path=os.path.join(self.model_dir, BEST_MODEL_DIR_NAME),
+                n_eval_episodes=callback_params.get("n_eval_episodes", DEFAULT_N_EVAL_EPISODES)
             )
         ]
     
-    def train(self, total_timesteps=100_000):
+    def train(self, total_timesteps):
         """Run training"""
         print(f"\n🏁 Training {total_timesteps:,} timesteps")
         print(f"📊 ID: {self.run_id}")
@@ -151,7 +202,6 @@ class TrainingManager:
                 callback=self.callbacks,
                 reset_num_timesteps=(not os.path.exists(self.latest_model_path)),
                 progress_bar=True,
-                log_interval=None,
                 tb_log_name=self.run_id
             )
             
@@ -191,6 +241,7 @@ def main():
     parser = argparse.ArgumentParser(description="Complete osu!mania AI Training")
     parser.add_argument("--config", type=str, required=True, help="Config file path")
     parser.add_argument("--timesteps", type=int, default=None, help="Override total timesteps from config")
+    parser.add_argument("--show-eval", action="store_true", help="Show the evaluation environment window.")
     
     args = parser.parse_args()
     
@@ -199,12 +250,12 @@ def main():
         sys.exit(1)
     
     try:
-        trainer = TrainingManager(args.config)
+        trainer = TrainingManager(args.config, show_eval_window=args.show_eval)
         
         # Determine timesteps: CLI > config > default
         timesteps = args.timesteps
         if timesteps is None:
-            timesteps = trainer.config.get("training_params", {}).get("total_timesteps", 100_000)
+            timesteps = trainer.config.get("training_params", {}).get("total_timesteps", DEFAULT_TOTAL_TIMESTEPS)
 
         trainer.create_environments()
         trainer.create_model()

@@ -10,7 +10,10 @@ from typing import Dict, Any
 import pydirectinput
 import threading
 from queue import Queue
-from environments.constants import KEY_MAPPINGS, FRAME_SIZE, VISUALIZATION_SIZE, FRAME_DELAY
+from environments.constants import (
+    KEY_MAPPINGS, FRAME_SIZE, VISUALIZATION_SIZE, FRAME_DELAY, 
+    VIS_SIZE, DEFAULT_REWARD_PARAMS
+)
 
 from memory_reader import UltraFastMemoryReader as MemoryReader
 
@@ -19,7 +22,7 @@ class OsuManiaEnv(gym.Env):
     Optimized osu!mania Environment và Performance Optimizations
     """
 
-    def __init__(self, config_path: str, show_window=False, run_id: str = "default"):
+    def __init__(self, config_path: str, show_window=False, run_id: str = "default", is_eval_env=False):
         super(OsuManiaEnv, self).__init__()
         
         # Load config
@@ -32,13 +35,9 @@ class OsuManiaEnv(gym.Env):
         self.num_keys = self.config.get('num_keys', 4)
         self.max_steps = self.config.get('max_steps', 15000)
         
-        # Load reward parameters from config
+        # Load reward parameters from config, with defaults from constants
         reward_params = self.config.get('reward_params', {})
-        self.miss_penalty = reward_params.get('miss_penalty', -5.0)
-        self.key_spam_penalty = reward_params.get('key_spam_penalty', -0.01)
-        self.idle_penalty = reward_params.get('idle_penalty', -0.05)
-        self.menu_key_penalty = reward_params.get('menu_key_penalty', -0.5)
-        self.menu_idle_reward = reward_params.get('menu_idle_reward', 0.1)
+        self.reward_values = {**DEFAULT_REWARD_PARAMS, **reward_params}
 
         # Setup key mappings
         self.keys = KEY_MAPPINGS.get(self.num_keys)
@@ -49,6 +48,7 @@ class OsuManiaEnv(gym.Env):
         self.sct = mss.mss()
         self.show_window = show_window
         self.memory_reader = MemoryReader()
+        self.is_eval_env = is_eval_env
         
         # Gym spaces
         self.action_space = spaces.Discrete(2**self.num_keys)
@@ -59,6 +59,8 @@ class OsuManiaEnv(gym.Env):
         self.previous_keys_state = [False] * self.num_keys
         self.step_count = 0
         self.key_hold_steps = np.zeros(self.num_keys, dtype=int)
+        self.no_data_steps = 0
+        self.NO_DATA_THRESHOLD = 30  # ~0.5 seconds of no data
 
         # Game state
         self.last_combo, self.prev_combo = 0, 0
@@ -94,8 +96,6 @@ class OsuManiaEnv(gym.Env):
 
     def _capture_loop(self):
         """Background thread - create separate mss instance"""
-        import mss
-        
         try:
             sct_thread = mss.mss(with_cursor=False)  # Thread-local mss
             print("✅ Capture thread started")
@@ -131,7 +131,8 @@ class OsuManiaEnv(gym.Env):
         """
         Improved reward function with better signal for learning
         """
-        reward = 0.0
+        # Start with a constant penalty to encourage action
+        reward = self.reward_values.get("living_penalty", 0.0)
         num_keys_pressed = sum(self.previous_keys_state)
         is_gameplay_active = self.game_state == 2
 
@@ -141,26 +142,24 @@ class OsuManiaEnv(gym.Env):
                 hit_diffs = {k: self.last_hits.get(k, 0) - self.prev_hits.get(k, 0) for k in self.last_hits}
                 
                 # Calculate Rewards
-                reward += hit_diffs.get('hit_geki', 0) * 5.0     # Perfect hits (increased)
-                reward += hit_diffs.get('hit_300', 0) * 3.0      # Good hits (increased)
-                reward += hit_diffs.get('hit_100', 0) * 1.0      # OK hits (less penalty)
-                reward += hit_diffs.get('hit_50', 0) * -0.5      # Bad hits (small penalty)
-                reward += hit_diffs.get('miss', 0) * -3.0        # Misses (reduced from -5.0)
+                reward += hit_diffs.get('hit_geki', 0) * self.reward_values["hit_geki_reward"]
+                reward += hit_diffs.get('hit_300', 0) * self.reward_values["hit_300_reward"]
+                reward += hit_diffs.get('hit_100', 0) * self.reward_values["hit_100_reward"]
+                reward += hit_diffs.get('hit_50', 0) * self.reward_values["hit_50_penalty"]
+                reward += hit_diffs.get('miss', 0) * self.reward_values["miss_penalty"]
                 
                 # Combo reward (encourage streaks)
                 if self.last_combo > self.prev_combo:
                     combo_increase = self.last_combo - self.prev_combo
-                    reward += combo_increase * 0.1  # Reward for extending combo
+                    reward += combo_increase * self.reward_values["combo_increase_reward"]
                 
                 # Small penalty for missing combo, but not crushing
                 if self.last_combo == 0 and self.prev_combo > 5:
-                    reward += -1.0  # Reduced from -5.0
+                    reward += self.reward_values["combo_break_penalty"]
             
-            # CRITICAL FIX: Reward attempting to play, penalize staying idle
-            if num_keys_pressed > 0:
-                reward += 0.01  # Small positive for trying (instead of penalty)
-            else:
-                reward -= 0.02  # Small penalty for inaction
+            # Add an extra penalty for being idle
+            if num_keys_pressed == 0:
+                reward += self.reward_values["idle_penalty"]
         
         else:
             pass # No penalty in menu, just neutral
@@ -172,6 +171,15 @@ class OsuManiaEnv(gym.Env):
         self.prev_hits = self.last_hits.copy()
         
         return reward
+
+    def _restart_beatmap(self):
+        """Sends key presses to exit and restart the current beatmap."""
+        self.log("No data from memory reader. Attempting to restart beatmap.", "WARNING")
+        pydirectinput.press('esc')
+        time.sleep(1.0)
+        pydirectinput.press('enter')
+        time.sleep(0.5)
+        pydirectinput.press('enter')
 
     def _is_game_ended(self) -> bool:
         """
@@ -192,9 +200,13 @@ class OsuManiaEnv(gym.Env):
                 key = self.keys[i]
                 is_press = action_combo[i]
                 
+                # --- DEBUG LOG for EVALUATION ---
+                if self.is_eval_env:
+                    action_type = "Press" if is_press else "Release"
+                    print(f"[Eval Action] {action_type}: {key}")
+                # --------------------------------
+
                 # Create a thread for this key action
-                import threading
-                
                 def send_key():
                     try:
                         if is_press:
@@ -241,6 +253,25 @@ class OsuManiaEnv(gym.Env):
         self.last_hits = {k: v for k, v in game_state.items() if 'hit' in k or k == 'miss'}
         times['memory_read'] = (time.time() - t3) * 1000
         
+        # --- DATA VALIDITY CHECK ---
+        # Sometime tosu doesn't update memory properly during gameplay
+        # If we detect no score updates for a while during gameplay, restart the beatmap
+        terminated = False
+        if self.game_state == 2:
+            # If score is None, it's a good sign that the memory reader failed
+            if self.last_score is None:
+                self.no_data_steps += 1
+            else:
+                self.no_data_steps = 0
+            
+            if self.no_data_steps > self.NO_DATA_THRESHOLD:
+                self._restart_beatmap()
+                terminated = True  # End the episode to trigger a reset
+                self.no_data_steps = 0
+        else:
+            self.no_data_steps = 0  # Reset counter if not in gameplay
+        # -------------------------
+
         # 4. Calculate reward
         t4 = time.time()
         reward = self._calculate_reward()
@@ -248,25 +279,25 @@ class OsuManiaEnv(gym.Env):
         
         # 5. Check termination
         t5 = time.time()
-        terminated = self._is_game_ended()
+        terminated = terminated or self._is_game_ended()
         truncated = self.step_count >= self.max_steps
         times['termination_check'] = (time.time() - t5) * 1000
         
-        # 6. Maintain FPS
+        # 6. Visualization
         t6 = time.time()
-        elapsed = time.time() - step_start
-        if elapsed < FRAME_DELAY:
-            time.sleep(FRAME_DELAY - elapsed)
-        times['fps_maintain'] = (time.time() - t6) * 1000
-        
-        # 7. Visualization
-        t7 = time.time()
         if self.show_window:
             self._show_visualization(new_frame, action_combo, reward, step_start)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 self.user_quit = True
-        times['visualization'] = (time.time() - t7) * 1000
+        times['visualization'] = (time.time() - t6) * 1000
+        
+        # 7. Maintain FPS
+        t7 = time.time()
+        elapsed = time.time() - step_start
+        if elapsed < FRAME_DELAY:
+            time.sleep(FRAME_DELAY - elapsed)
+        times['fps_maintain'] = (time.time() - t7) * 1000
         
         total_time = (time.time() - step_start) * 1000
         times['total'] = total_time
@@ -279,22 +310,18 @@ class OsuManiaEnv(gym.Env):
             print(f"Memory Read:       {times['memory_read']:6.2f}ms")
             print(f"Reward Calc:       {times['reward_calc']:6.2f}ms")
             print(f"Termination Check: {times['termination_check']:6.2f}ms")
-            print(f"FPS Maintain:      {times['fps_maintain']:6.2f}ms")
             print(f"Visualization:     {times['visualization']:6.2f}ms")
+            print(f"FPS Maintain:      {times['fps_maintain']:6.2f}ms")
             print(f"{'─'*40}")
             print(f"TOTAL:             {times['total']:6.2f}ms ({1000/times['total']:.1f} FPS)")
             print(f"Unaccounted:       {times['total'] - sum([times[k] for k in times if k != 'total']):6.2f}ms")
-
-        # 8. Maintain FPS
-        elapsed = time.time() - step_start
-        if elapsed < FRAME_DELAY:
-            time.sleep(FRAME_DELAY - elapsed)
 
         info = {
             'combo': self.last_combo if self.last_combo is not None else self.prev_combo,
             'score': self.last_score if self.last_score is not None else self.prev_score,
             'accuracy': self.last_accuracy if self.last_accuracy is not None else self.prev_accuracy,
             'fps': 1.0 / max(time.time() - step_start, 0.001),
+            'game_state': self.game_state,
             **self.last_hits
         }
         
@@ -317,7 +344,6 @@ class OsuManiaEnv(gym.Env):
 
     def _show_visualization(self, frame, action_combo, reward, step_start):
         """Enhanced visualization"""
-        VIS_SIZE = 280
         vis_frame = cv2.cvtColor(cv2.resize(frame, (VIS_SIZE, VIS_SIZE)), cv2.COLOR_GRAY2BGR)
         key_width = VIS_SIZE // self.num_keys
         
@@ -362,6 +388,18 @@ class OsuManiaEnv(gym.Env):
                 pydirectinput.keyUp(key)
             except: 
                 pass
+        
+        # --- AUTOMATION FIX for EVALUATION ---
+        # If this is the evaluation environment, automatically restart the map.
+        if self.is_eval_env:
+            self.log("Evaluation environment: attempting to restart map automatically.")
+            time.sleep(1.0) # Wait for screen to settle
+            pydirectinput.press('esc')
+            time.sleep(1.0) # Wait for menu
+            pydirectinput.press('enter')
+            time.sleep(0.5)
+            pydirectinput.press('enter')
+        # ------------------------------------
 
         # Reset state
         self.user_quit = False
