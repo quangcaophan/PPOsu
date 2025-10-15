@@ -27,10 +27,7 @@ class SongFinishedEvalCallback(EvalCallback):
     and the results screen (game_state=7) is reached.
     """
     def __init__(self, *args, **kwargs):
-        # Pop eval_freq as it's not used for our trigger mechanism
-        kwargs.pop('eval_freq', None)
-        
-        # Set a dummy eval_freq for the parent class; our logic overrides it.
+        kwargs.pop('eval_freq', None)        
         super().__init__(*args, eval_freq=1, **kwargs)
 
     def _on_step(self) -> bool:
@@ -38,11 +35,10 @@ class SongFinishedEvalCallback(EvalCallback):
         if self.locals["dones"][0]:
             info = self.locals["infos"][0]
             
-            # Check if the song was finished (game_state is 7)
             if info.get("game_state") == 7:
                 if self.verbose > 0:
                     print("\n🎶 Song finished! Triggering evaluation...")
-                    time.sleep(5) # Give user time to focus the game window
+                    time.sleep(5)
                 
                 # Trick the parent class to run evaluation.
                 # We save and restore n_calls to not affect other callbacks.
@@ -134,7 +130,7 @@ class TrainingManager:
         # Training environment: no auto-restart
         self.env = OsuManiaEnv(
             config_path=self.config_path, 
-            show_window=False,
+            show_window=True,
             run_id=self.run_id,
             is_eval_env=False
         )
@@ -158,6 +154,15 @@ class TrainingManager:
         
         if os.path.exists(self.latest_model_path):
             print(f"🔄 Loading: {self.latest_model_path}")
+            temp_model = PPO.load(self.latest_model_path, device=device)
+            if temp_model.observation_space != self.env.observation_space:
+                print(f"❌ Observation space mismatch!\n"
+                      f"   - Model was saved with: {temp_model.observation_space}\n"
+                      f"   - Current environment has: {self.env.observation_space}\n"
+                      f"   This is likely because you changed FRAME_SIZE or observation preprocessing.\n"
+                      f"   👉 Please delete the old model file to start fresh:\n"
+                      f"   {self.latest_model_path}")
+                sys.exit(1)
             self.model = PPO.load(self.latest_model_path, env=self.env, device=device)
         else:
             print("🆕 Creating new PPO model...")

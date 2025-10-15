@@ -9,17 +9,17 @@ import json
 from typing import Dict, Any
 import pydirectinput
 import threading
-from queue import Queue
+from queue import Queue, Empty # Import 'Empty' để bắt lỗi cụ thể
+
 from environments.constants import (
     KEY_MAPPINGS, FRAME_SIZE, VISUALIZATION_SIZE, FRAME_DELAY, 
     VIS_SIZE, DEFAULT_REWARD_PARAMS
 )
-
 from memory_reader import UltraFastMemoryReader as MemoryReader
 
 class OsuManiaEnv(gym.Env):
     """
-    Optimized osu!mania Environment và Performance Optimizations
+    Optimized osu!mania Environment with Performance Optimizations.
     """
 
     def __init__(self, config_path: str, show_window=False, run_id: str = "default", is_eval_env=False):
@@ -35,7 +35,7 @@ class OsuManiaEnv(gym.Env):
         self.num_keys = self.config.get('num_keys', 4)
         self.max_steps = self.config.get('max_steps', 15000)
         
-        # Load reward parameters from config, with defaults from constants
+        # Load reward parameters from config
         reward_params = self.config.get('reward_params', {})
         self.reward_values = {**DEFAULT_REWARD_PARAMS, **reward_params}
 
@@ -58,32 +58,32 @@ class OsuManiaEnv(gym.Env):
         self.last_four_frames = np.zeros((4, FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
         self.previous_keys_state = [False] * self.num_keys
         self.step_count = 0
-        self.key_hold_steps = np.zeros(self.num_keys, dtype=int)
         self.no_data_steps = 0
         self.NO_DATA_THRESHOLD = 30  # ~0.5 seconds of no data
-
-        # Game state
+        
+        # Game state trackers
         self.last_combo, self.prev_combo = 0, 0
         self.last_score, self.prev_score = 0, 0
         self.last_accuracy, self.prev_accuracy = 1.0, 1.0
-        self.last_hits = {}
-        self.prev_hits = {}
+        self.last_hits, self.prev_hits = {}, {}
         self.game_state = 0
         
         # Control variables
         self.user_quit = False
         
-        # Performance tracking
-        self.frame_times = deque(maxlen=100)
-        
-        self.frame_queue = Queue(maxsize=1)
+        # Thread-safe frame communication
+        self.frame_queue = Queue(maxsize=2)
+        self.frame_intervals = deque(maxlen=120)
+        self.crop_only = (
+            self.play_area.get('width', FRAME_SIZE) == FRAME_SIZE and
+            self.play_area.get('height', FRAME_SIZE) == FRAME_SIZE
+        )
         self.capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
         self.capture_thread.start()
-        self.latest_frame = np.zeros((FRAME_SIZE, FRAME_SIZE), dtype=np.uint8)
+        
         self.log(f"Environment initialized for osu!mania {self.num_keys}K mode")
 
     def log(self, message, level="INFO"):
-        """Simple logging"""
         prefix = {"INFO": "✅", "WARNING": "⚠️", "ERROR": "❌"}.get(level, "📝")
         print(f"{prefix} {message}")
 
@@ -95,313 +95,245 @@ class OsuManiaEnv(gym.Env):
             return {}
 
     def _capture_loop(self):
-        """Background thread - create separate mss instance"""
+        """Background thread to capture screen frames and put them in a queue with stable FPS."""
         try:
-            sct_thread = mss.mss(with_cursor=False)  # Thread-local mss
-            print("✅ Capture thread started")
-            
+            sct_thread = mss.mss(with_cursor=False)
+            print("✅ Capture thread started (using Queue)")
+            next_frame_time = time.time()
+            prev_time = time.time()
             while True:
                 try:
-                    frame_start = time.time()
-                    
-                    sct_img = sct_thread.grab(self.play_area)  # Use thread-local
+                    sct_img = sct_thread.grab(self.play_area)
                     img = np.array(sct_img)
-                    resized = cv2.resize(img, (FRAME_SIZE, FRAME_SIZE))
-                    gray = cv2.cvtColor(resized, cv2.COLOR_BGRA2GRAY)
-                    
-                    self.latest_frame = gray
-                    capture_time = (time.time() - frame_start) * 1000
-                    self.frame_times.append(capture_time)
-                    
-                    time.sleep(0.016)  # ~60 FPS
-                    
+                    if self.crop_only:
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGRA2GRAY)
+                    else:
+                        resized = cv2.resize(img, (FRAME_SIZE, FRAME_SIZE))
+                        gray = cv2.cvtColor(resized, cv2.COLOR_BGRA2GRAY)
+                    gray = cv2.GaussianBlur(gray, (3,3), 0)
+                    gray = cv2.equalizeHist(gray)
+                    norm_gray = gray.astype(np.float32) / 255.0
+                    if not self.frame_queue.empty():
+                        try:
+                            self.frame_queue.get_nowait()
+                        except Empty:
+                            pass
+                    self.frame_queue.put(norm_gray)
+                    interval = (time.time() - prev_time) * 1000
+                    self.frame_intervals.append(interval)
+                    prev_time = time.time()
+                    next_frame_time += 1/60
+                    delay = next_frame_time - time.time()
+                    if delay > 0:
+                        time.sleep(delay)
                 except Exception as e:
                     print(f"❌ Capture error: {e}")
                     time.sleep(0.1)
-        
         except Exception as e:
-            print(f"❌ Capture thread init failed: {e}")
+            print(f"❌ Capture thread initialization failed: {e}")
 
     def _get_state(self):
-        """Get state - now just returns pre-captured frame (instant!)"""
-        # This is now instant - frame was already captured in background
-        return self.latest_frame.copy()
+        """Pulls the latest normalized frame from the thread-safe queue."""
+        try:
+            frame = self.frame_queue.get_nowait()
+        except Empty:
+            frame = self.last_four_frames[-1]
+        except Exception as e:
+            print(f"❌ Frame queue error: {e}")
+            frame = self.last_four_frames[-1]
+        return frame.copy()
 
     def _calculate_reward(self):
-        """
-        Improved reward function with better signal for learning
-        """
-        # Start with a constant penalty to encourage action
-        reward = self.reward_values.get("living_penalty", 0.0)
-        num_keys_pressed = sum(self.previous_keys_state)
-        is_gameplay_active = self.game_state == 2
+            """
+            Hàm phần thưởng được cải tiến với các tín hiệu học hỏi dày đặc và có ý nghĩa hơn.
+            Bao gồm: Chi phí hành động, Thưởng cột mốc combo, và Thưởng theo thay đổi độ chính xác.
+            """
+            reward_values = self.reward_values            
+            reward = reward_values.get("living_penalty", -0.01)
+            num_keys_pressed = sum(self.previous_keys_state)
+            action_cost = reward_values.get("action_cost_penalty", -0.005) * num_keys_pressed
+            reward += action_cost
+            is_gameplay_active = self.game_state == 2
+            if is_gameplay_active:
+                if self.prev_hits:
+                    hit_diffs = {k: self.last_hits.get(k, 0) - self.prev_hits.get(k, 0) for k in self.last_hits}
+                    
+                    reward += hit_diffs.get('hit_geki', 0) * reward_values.get("hit_geki_reward", 5.0)
+                    reward += hit_diffs.get('hit_300', 0) * reward_values.get("hit_300_reward", 3.0)
+                    reward += hit_diffs.get('hit_100', 0) * reward_values.get("hit_100_reward", 1.0)
+                    reward += hit_diffs.get('hit_50', 0) * reward_values.get("hit_50_penalty", -0.5)
+                    reward += hit_diffs.get('miss', 0) * reward_values.get("miss_penalty", -1.0)
 
-        if is_gameplay_active:
-            if self.prev_hits:
-                # Calculate hit differences
-                hit_diffs = {k: self.last_hits.get(k, 0) - self.prev_hits.get(k, 0) for k in self.last_hits}
-                
-                # Calculate Rewards
-                reward += hit_diffs.get('hit_geki', 0) * self.reward_values["hit_geki_reward"]
-                reward += hit_diffs.get('hit_300', 0) * self.reward_values["hit_300_reward"]
-                reward += hit_diffs.get('hit_100', 0) * self.reward_values["hit_100_reward"]
-                reward += hit_diffs.get('hit_50', 0) * self.reward_values["hit_50_penalty"]
-                reward += hit_diffs.get('miss', 0) * self.reward_values["miss_penalty"]
-                
-                # Combo reward (encourage streaks)
                 if self.last_combo > self.prev_combo:
                     combo_increase = self.last_combo - self.prev_combo
-                    reward += combo_increase * self.reward_values["combo_increase_reward"]
+                    reward += combo_increase * reward_values.get("combo_increase_reward", 0.1)
+                    
+                    if self.prev_combo < 50 and self.last_combo >= 50:
+                        reward += reward_values.get("combo_milestone_50", 10.0)
+                    if self.prev_combo < 100 and self.last_combo >= 100:
+                        reward += reward_values.get("combo_milestone_100", 20.0)
+                    if self.prev_combo < 200 and self.last_combo >= 200:
+                        reward += reward_values.get("combo_milestone_200", 40.0)
                 
-                # Small penalty for missing combo, but not crushing
                 if self.last_combo == 0 and self.prev_combo > 5:
-                    reward += self.reward_values["combo_break_penalty"]
+                    reward += reward_values.get("combo_break_penalty", -0.5)
+
+                if self.last_accuracy is not None and self.prev_accuracy is not None:
+                    accuracy_change = self.last_accuracy - self.prev_accuracy
+                    accuracy_multiplier = reward_values.get("accuracy_change_multiplier", 100.0)
+                    reward += accuracy_change * accuracy_multiplier
+
+                if num_keys_pressed == 0:
+                    reward += reward_values.get("idle_penalty", -0.02)
             
-            # Add an extra penalty for being idle
-            if num_keys_pressed == 0:
-                reward += self.reward_values["idle_penalty"]
-        
-        else:
-            pass # No penalty in menu, just neutral
-
-        # Update previous values
-        self.prev_combo = self.last_combo
-        self.prev_score = self.last_score
-        self.prev_accuracy = self.last_accuracy
-        self.prev_hits = self.last_hits.copy()
-        
-        return reward
-
-    def _restart_beatmap(self):
-        """Sends key presses to exit and restart the current beatmap."""
-        self.log("No data from memory reader. Attempting to restart beatmap.", "WARNING")
-        pydirectinput.press('esc')
-        time.sleep(1.0)
-        pydirectinput.press('enter')
-        time.sleep(0.5)
-        pydirectinput.press('enter')
+            self.prev_combo = self.last_combo
+            self.prev_score = self.last_score
+            self.prev_accuracy = self.last_accuracy
+            self.prev_hits = self.last_hits.copy()
+            
+            return reward
 
     def _is_game_ended(self) -> bool:
-        """
-        Check if game has ended based on game state from memory reader.
-        State 2 is the gameplay screen.
-        """
         return self.game_state != 2 or self.user_quit
 
     def _execute_action_safely(self, action_combo):
         """
-        Execute key actions with THREADING to avoid blocking
-        Non-blocking key presses using background thread
+        Executes key actions sequentially and efficiently without creating new threads.
         """
-        # Check if state changed
-        for i in range(self.num_keys):
-            if self.previous_keys_state[i] != action_combo[i]:
-                # Use threading to avoid blocking
+        try:
+            for i in range(self.num_keys):
                 key = self.keys[i]
-                is_press = action_combo[i]
-                
-                # --- DEBUG LOG for EVALUATION ---
-                if self.is_eval_env:
-                    action_type = "Press" if is_press else "Release"
-                    print(f"[Eval Action] {action_type}: {key}")
-                # --------------------------------
-
-                # Create a thread for this key action
-                def send_key():
+                current_state = action_combo[i]
+                previous_state = self.previous_keys_state[i]
+                if current_state != previous_state:
                     try:
-                        if is_press:
+                        if current_state:
                             pydirectinput.keyDown(key)
                         else:
                             pydirectinput.keyUp(key)
-                    except Exception:
-                        pass
-                
-                thread = threading.Thread(target=send_key, daemon=True)
-                thread.start()
-                # DON'T wait for thread - let it run in background
-        
-        self.previous_keys_state = action_combo.copy()
+                    except Exception as e:
+                        print(f"❌ Key action error for {key}: {e}")
+            self.previous_keys_state = action_combo
+        except Exception as e:
+            print(f"❌ Action execution error: {e}")
 
     def step(self, action):
-        """Main step function with DETAILED TIMING"""
         step_start = time.time()
         self.step_count += 1
         action_combo = [bool((action >> i) & 1) for i in range(self.num_keys)]
         
-        # TIMING EACH SECTION
-        times = {}
-        
         # 1. Execute action
-        t1 = time.time()
         self._execute_action_safely(action_combo)
-        times['action_execution'] = (time.time() - t1) * 1000
+        
+        # --- State Consistency: Wait for next frame after action ---
+        time.sleep(1/60)  # Wait for one frame tick to ensure new frame after action
         
         # 2. Capture frame
-        t2 = time.time()
         new_frame = self._get_state()
-        self.last_four_frames = np.roll(self.last_four_frames, -1, axis=0)
+        # --- Rolling buffer optimization ---
+        self.last_four_frames[:-1] = self.last_four_frames[1:]
         self.last_four_frames[-1] = new_frame
-        times['frame_capture'] = (time.time() - t2) * 1000
         
         # 3. Get game state from RAM
-        t3 = time.time()
-        game_state = self.memory_reader.get_game_state()
-        self.game_state = game_state.get('game_state')
-        self.last_score = game_state.get('score')
-        self.last_combo = game_state.get('combo')
-        self.last_accuracy = game_state.get('accuracy')
-        self.last_hits = {k: v for k, v in game_state.items() if 'hit' in k or k == 'miss'}
-        times['memory_read'] = (time.time() - t3) * 1000
-        
-        # --- DATA VALIDITY CHECK ---
-        # Sometime tosu doesn't update memory properly during gameplay
-        # If we detect no score updates for a while during gameplay, restart the beatmap
-        terminated = False
-        if self.game_state == 2:
-            # If score is None, it's a good sign that the memory reader failed
-            if self.last_score is None:
-                self.no_data_steps += 1
-            else:
-                self.no_data_steps = 0
-            
-            if self.no_data_steps > self.NO_DATA_THRESHOLD:
-                self._restart_beatmap()
-                terminated = True  # End the episode to trigger a reset
-                self.no_data_steps = 0
+        game_state_data = self.memory_reader.get_game_state()
+        if not game_state_data.get('fetch_successful', True):
+            self.log("Communication with gosumemory/tosu might be lost.", "WARNING")
+            self.no_data_steps += 1
         else:
-            self.no_data_steps = 0  # Reset counter if not in gameplay
-        # -------------------------
+            self.no_data_steps = 0
+
+        self.game_state = game_state_data.get('game_state')
+        self.last_score = game_state_data.get('score')
+        self.last_combo = game_state_data.get('combo')
+        self.last_accuracy = game_state_data.get('accuracy')
+        self.last_hits = {k: v for k, v in game_state_data.items() if 'hit' in k or k == 'miss'}
+
+        # Auto-reset if memory reader fails repeatedly
+        if self.no_data_steps > self.NO_DATA_THRESHOLD:
+            self.log("Auto-resetting due to repeated memory reader failures.", "ERROR")
+            self.reset()
+            self.no_data_steps = 0
 
         # 4. Calculate reward
-        t4 = time.time()
         reward = self._calculate_reward()
-        times['reward_calc'] = (time.time() - t4) * 1000
         
         # 5. Check termination
-        t5 = time.time()
-        terminated = terminated or self._is_game_ended()
+        terminated = self._is_game_ended()
         truncated = self.step_count >= self.max_steps
-        times['termination_check'] = (time.time() - t5) * 1000
         
         # 6. Visualization
-        t6 = time.time()
         if self.show_window:
             self._show_visualization(new_frame, action_combo, reward, step_start)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
+            if (cv2.waitKey(1) & 0xFF) == ord('q'):
                 self.user_quit = True
-        times['visualization'] = (time.time() - t6) * 1000
         
         # 7. Maintain FPS
-        t7 = time.time()
         elapsed = time.time() - step_start
         if elapsed < FRAME_DELAY:
             time.sleep(FRAME_DELAY - elapsed)
-        times['fps_maintain'] = (time.time() - t7) * 1000
-        
-        total_time = (time.time() - step_start) * 1000
-        times['total'] = total_time
-        
-        # PRINT TIMING BREAKDOWN every 200 steps
-        if self.step_count % 200 == 0:
-            print(f"\n=== STEP {self.step_count} TIMING BREAKDOWN ===")
-            print(f"Action Execution:  {times['action_execution']:6.2f}ms")
-            print(f"Frame Capture:     {times['frame_capture']:6.2f}ms")
-            print(f"Memory Read:       {times['memory_read']:6.2f}ms")
-            print(f"Reward Calc:       {times['reward_calc']:6.2f}ms")
-            print(f"Termination Check: {times['termination_check']:6.2f}ms")
-            print(f"Visualization:     {times['visualization']:6.2f}ms")
-            print(f"FPS Maintain:      {times['fps_maintain']:6.2f}ms")
-            print(f"{'─'*40}")
-            print(f"TOTAL:             {times['total']:6.2f}ms ({1000/times['total']:.1f} FPS)")
-            print(f"Unaccounted:       {times['total'] - sum([times[k] for k in times if k != 'total']):6.2f}ms")
 
         info = {
-            'combo': self.last_combo if self.last_combo is not None else self.prev_combo,
-            'score': self.last_score if self.last_score is not None else self.prev_score,
-            'accuracy': self.last_accuracy if self.last_accuracy is not None else self.prev_accuracy,
+            'combo': self.last_combo,
+            'score': self.last_score,
+            'accuracy': self.last_accuracy,
             'fps': 1.0 / max(time.time() - step_start, 0.001),
             'game_state': self.game_state,
             **self.last_hits
         }
-        
-        # 9. JSON Tracing
-        if hasattr(self, 'tracer'):
-            trace_data = {
-                'step': self.step_count,
-                'timestamp': time.time(),
-                'action': int(action),
-                'action_combo': action_combo,
-                'reward': reward,
-                'terminated': terminated,
-                'truncated': truncated,
-                'game_state': self.game_state,
-                **info
-            }
-            self.tracer.log_step(trace_data)
 
-        return self.last_four_frames.copy(), reward, terminated, truncated, info
+        # --- Buffer is always normalized, so just return copy ---
+        obs = self.last_four_frames.copy()
+        return obs, reward, terminated, truncated, info
 
     def _show_visualization(self, frame, action_combo, reward, step_start):
-        """Enhanced visualization"""
         vis_frame = cv2.cvtColor(cv2.resize(frame, (VIS_SIZE, VIS_SIZE)), cv2.COLOR_GRAY2BGR)
         key_width = VIS_SIZE // self.num_keys
         
-        # Key indicators
         for i in range(self.num_keys):
             x = i * key_width
             color = (0, 255, 0) if action_combo[i] else (0, 0, 255)
             cv2.rectangle(vis_frame, (x, 0), (x + key_width, 25), color, -1)
         
-        # Game info
         y, h = 50, 25
-        current_fps = 1.0 / max(time.time() - step_start, 0.001)
-        avg_fps = len(self.frame_times) / max(sum(self.frame_times), 0.001) if self.frame_times else 0
-        
         info_texts = [
             f"Reward: {reward:.2f}",
             f"Combo: {self.last_combo}",
             f"Acc: {self.last_accuracy*100:.1f}%",
-            f"Geki: {self.last_hits.get('hit_geki', 0)}",
-            f"300: {self.last_hits.get('hit_300', 0)}",
-            f"100: {self.last_hits.get('hit_100', 0)}",
-            f"50: {self.last_hits.get('hit_50', 0)}",
             f"Miss: {self.last_hits.get('miss', 0)}"
         ]
         
         for i, text in enumerate(info_texts):
-            color = (255, 255, 0) if i < 4 else (255, 0, 255)
-            cv2.putText(vis_frame, text, (10, y + i*h), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            cv2.putText(vis_frame, text, (10, y + i*h), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
         
-        cv2.putText(vis_frame, "Press 'q' to quit", (10, VISUALIZATION_SIZE - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
-
         cv2.imshow(f'Osu! Mania AI - {self.num_keys}K', vis_frame)
 
     def reset(self, seed=None, options=None):
-        """Reset environment state"""
         super().reset(seed=seed)
         self.log("Resetting environment... Start new song!")
 
-        # Release keys
         for key in self.keys: 
             try: 
                 pydirectinput.keyUp(key)
             except: 
                 pass
         
-        # --- AUTOMATION FIX for EVALUATION ---
-        # If this is the evaluation environment, automatically restart the map.
+        # Add retry logic for evaluation environment
         if self.is_eval_env:
             self.log("Evaluation environment: attempting to restart map automatically.")
-            time.sleep(1.0) # Wait for screen to settle
-            pydirectinput.press('esc')
-            time.sleep(1.0) # Wait for menu
-            pydirectinput.press('enter')
-            time.sleep(0.5)
-            pydirectinput.press('enter')
-        # ------------------------------------
+            for attempt in range(3):
+                time.sleep(3.0)
+                pydirectinput.press('esc')
+                time.sleep(5.0)
+                pydirectinput.press('enter')
+                time.sleep(1.0)
+                pydirectinput.press('enter')
+                # Check if game state is correct
+                game_state_data = self.memory_reader.get_game_state()
+                self.game_state = game_state_data.get('game_state')
+                if self.game_state == 2:
+                    break
+                self.log(f"Retry {attempt+1}: Game state is {self.game_state}, not 2 (Playing)", "WARNING")
 
-        # Reset state
         self.user_quit = False
         self.step_count = 0
         self.last_combo, self.prev_combo = 0, 0
@@ -409,16 +341,10 @@ class OsuManiaEnv(gym.Env):
         self.last_accuracy, self.prev_accuracy = 1.0, 1.0
         self.last_hits, self.prev_hits = {}, {}
         self.game_state = 0
-        self.frame_times.clear()
-        self.key_hold_steps.fill(0)
         
-        # Start new trace file for the episode
-        if hasattr(self, 'tracer'):
-            self.tracer.start_episode()
-
         time.sleep(3)
 
-        max_wait = 15  # seconds
+        max_wait = 15
         waited = 0
         while self.game_state != 2 and waited < max_wait:
             game_state_data = self.memory_reader.get_game_state()
@@ -429,8 +355,6 @@ class OsuManiaEnv(gym.Env):
         if self.game_state != 2:
             self.log(f"WARNING: Game state is {self.game_state}, not 2 (Playing)", "WARNING")
         
-        
-        # Initialize frames
         for i in range(4):
             frame = self._get_state()
             self.last_four_frames[i] = frame
@@ -439,19 +363,10 @@ class OsuManiaEnv(gym.Env):
         return self.last_four_frames.copy(), {}
 
     def close(self):
-        """Cleanup resources"""
         cv2.destroyAllWindows()
-        
-        # Release keys
         for key in self.keys: 
             try: 
                 pydirectinput.keyUp(key)
             except: 
                 pass
-        
-        # Close tracer
-        if hasattr(self, 'tracer'):
-            self.tracer.close()
-        
         self.log("Environment closed")
-

@@ -104,14 +104,34 @@ class OsuSetupTool:
         if not self.config.get('play_area'): print("❌ Cannot save, play area is not set."); return
         
         self.config['max_steps'] = 15000
+        self.config['reward_params'] = {
+            "living_penalty": -0.01,
+            "action_cost_penalty": -0.005,
+            "idle_penalty": -0.05,
+            
+            "hit_geki_reward": 5.0,
+            "hit_300_reward": 3.0,
+            "hit_100_reward": 1.0,
+            "hit_50_penalty": -0.5,
+            "miss_penalty": -1.0,
+            
+            "combo_break_penalty": -0.5,
+            "combo_increase_reward": 0.1,
+            
+            "combo_milestone_50": 10.0,
+            "combo_milestone_100": 20.0,
+            "combo_milestone_200": 40.0,
+            
+            "accuracy_change_multiplier": 100.0
+        }
         self.config['training_params'] = {
             "policy": "CnnPolicy",
             "total_timesteps": 100000,
             "ppo_params": {
-                "n_steps": 512,
-                "batch_size": 32,
+                "n_steps": 1024,
+                "batch_size": 64,
                 "ent_coef": 0.01,
-                "learning_rate": 0.00025,
+                "learning_rate": 0.0001,
                 "clip_range": 0.2,
                 "n_epochs": 4
             },
@@ -121,6 +141,7 @@ class OsuSetupTool:
                 "n_eval_episodes": 5
             }
         }
+        
         
         self.config['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
         with open(filename, 'w') as f: json.dump(self.config, f, indent=4)

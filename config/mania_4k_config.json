@@ -2,22 +2,42 @@
     "mode": "mania",
     "num_keys": 4,
     "play_area": {
-        "top": 156,
-        "left": 758,
-        "width": 401,
-        "height": 684
+        "top": 168,
+        "left": 486,
+        "width": 398,
+        "height": 665
     },
     "max_steps": 15000,
+    "reward_params": {
+        "living_penalty": -0.01,
+        "action_cost_penalty": -0.005,
+        "idle_penalty": -0.05,
+        
+        "hit_geki_reward": 5.0,
+        "hit_300_reward": 3.0,
+        "hit_100_reward": 1.0,
+        "hit_50_penalty": -0.5,
+        "miss_penalty": -1.0,
+        
+        "combo_break_penalty": -0.5,
+        "combo_increase_reward": 0.1,
+        
+        "combo_milestone_50": 10.0,
+        "combo_milestone_100": 20.0,
+        "combo_milestone_200": 40.0,
+        
+        "accuracy_change_multiplier": 100.0
+    },
     "training_params": {
         "policy": "CnnPolicy",
         "total_timesteps": 100000,
         "ppo_params": {
             "n_steps": 512,
             "batch_size": 64,
-            "ent_coef": 0.1,
-            "learning_rate": 0.0005,
-            "clip_range": 0.3,
-            "n_epochs": 10
+            "ent_coef": 0.01,
+            "learning_rate": 0.0001,
+            "clip_range": 0.2,
+            "n_epochs": 4
         },
         "callback_params": {
             "checkpoint_save_freq": 10000,
@@ -25,5 +45,5 @@
             "n_eval_episodes": 5
         }
     },
-    "timestamp": "2025-10-10 15:54:20"
+    "timestamp": "2025-10-13 23:16:23"
 }

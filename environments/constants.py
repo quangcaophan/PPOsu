@@ -12,14 +12,13 @@ KEY_MAPPINGS = {
 }
 
 # Frame and visualization settings
-FRAME_SIZE = 96
+FRAME_SIZE = 84
 VISUALIZATION_SIZE = 420
 TARGET_FPS = 60
 FRAME_DELAY = 1.0 / TARGET_FPS  # 0.016667 seconds
 
 # Performance monitoring
 VIS_SIZE = 280
-NO_DATA_THRESHOLD = 30
 
 # ================== DIRECTORY AND FILE PATHS ==================
 # Base Directories
@@ -57,6 +56,7 @@ CALLBACK_N_EVAL_EPISODES = "n_eval_episodes"
 # These can be overridden in the config.json
 DEFAULT_REWARD_PARAMS = {
     "living_penalty": -0.01,
+    "action_cost_penalty": -0.005,
     "hit_geki_reward": 5.0,
     "hit_300_reward": 3.0,
     "hit_100_reward": 1.0,
@@ -64,6 +64,10 @@ DEFAULT_REWARD_PARAMS = {
     "miss_penalty": -1.0,
     "combo_break_penalty": -0.5,
     "combo_increase_reward": 0.1,
+    "combo_milestone_50": 10.0,
+    "combo_milestone_100": 20.0,
+    "combo_milestone_200": 40.0,
+    "accuracy_change_multiplier": 100.0,
     "idle_penalty": -0.02,
 }
 
