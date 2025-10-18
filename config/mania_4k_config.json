@@ -29,7 +29,7 @@
         "accuracy_change_multiplier": 10.0
     },
     "training_params": {
-        "policy": "MultiInputPolicy",
+        "policy": "CnnPolicy",
         "total_timesteps": 100000,
         "ppo_params": {
             "n_steps": 512,

@@ -31,8 +31,9 @@ class FrameProcessor:
         self.target_fps = target_fps
         self.frame_interval = 1.0 / target_fps
         
-        # Screen capture
-        self.sct = mss.mss()
+        # Screen capture (created within the capture thread to avoid thread-local issues)
+        # Note: MSS is not thread-safe across threads; instantiate per thread.
+        self._sct = None  # type: ignore[assignment]
         
         # Frame processing
         self.crop_only = (
@@ -97,43 +98,48 @@ class FrameProcessor:
         next_frame_time = time.time()
         prev_time = time.time()
         
-        while self.running:
-            try:
-                # Capture screen
-                sct_img = self.sct.grab(self.play_area)
-                img = np.array(sct_img)
-                
-                # Process frame
-                processed_frame = self._process_frame(img)
-                
-                # Update queue
-                if not self.frame_queue.full():
-                    self.frame_queue.put(processed_frame)
-                else:
-                    # Remove old frame if queue is full
+        try:
+            # Create MSS instance inside the capture thread
+            with mss.mss() as sct:
+                while self.running:
                     try:
-                        self.frame_queue.get_nowait()
-                        self.frame_queue.put(processed_frame)
-                    except Empty:
-                        pass
-                
-                # Update statistics
-                self.capture_count += 1
-                interval = (time.time() - prev_time) * 1000
-                self.frame_intervals.append(interval)
-                prev_time = time.time()
-                self.last_capture_time = time.time()
-                
-                # Maintain target FPS
-                next_frame_time += self.frame_interval
-                delay = next_frame_time - time.time()
-                if delay > 0:
-                    time.sleep(delay)
-                
-            except Exception as e:
-                self.error_count += 1
-                print(f"Frame capture error: {e}")
-                time.sleep(0.1)
+                        # Capture screen
+                        sct_img = sct.grab(self.play_area)
+                        img = np.array(sct_img)
+
+                        # Process frame
+                        processed_frame = self._process_frame(img)
+
+                        # Update queue
+                        if not self.frame_queue.full():
+                            self.frame_queue.put(processed_frame)
+                        else:
+                            # Remove old frame if queue is full
+                            try:
+                                self.frame_queue.get_nowait()
+                                self.frame_queue.put(processed_frame)
+                            except Empty:
+                                pass
+
+                        # Update statistics
+                        self.capture_count += 1
+                        interval = (time.time() - prev_time) * 1000
+                        self.frame_intervals.append(interval)
+                        prev_time = time.time()
+                        self.last_capture_time = time.time()
+
+                        # Maintain target FPS
+                        next_frame_time += self.frame_interval
+                        delay = next_frame_time - time.time()
+                        if delay > 0:
+                            time.sleep(delay)
+
+                    except Exception as e:
+                        self.error_count += 1
+                        print(f"Frame capture error: {e}")
+                        time.sleep(0.1)
+        finally:
+            self._sct = None
     
     def _process_frame(self, img: np.ndarray) -> np.ndarray:
         """
@@ -168,9 +174,10 @@ class FrameProcessor:
             Processed frame or None if capture failed
         """
         try:
-            sct_img = self.sct.grab(self.play_area)
-            img = np.array(sct_img)
-            return self._process_frame(img)
+            with mss.mss() as sct:
+                sct_img = sct.grab(self.play_area)
+                img = np.array(sct_img)
+                return self._process_frame(img)
         except Exception as e:
             print(f"Single frame capture error: {e}")
             return None
