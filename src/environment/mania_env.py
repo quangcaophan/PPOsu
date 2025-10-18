@@ -130,8 +130,8 @@ class OsuManiaEnv(gym.Env):
         # Execute action
         self._execute_action(action_combo)
         
-        # Wait for frame update
-        time.sleep(FRAME_DELAY)
+        # Wait for frame update (smaller sleep to reduce overhead; FPS enforced later)
+        time.sleep(FRAME_DELAY * 0.5)
         
         # Get new frame
         new_frame = self._get_latest_frame()
@@ -156,7 +156,7 @@ class OsuManiaEnv(gym.Env):
                 self.user_quit = True
                 terminated = True
         
-        # Maintain FPS
+        # Maintain target FPS pacing
         self._maintain_fps(step_start)
         
         # Prepare info
@@ -333,8 +333,9 @@ class OsuManiaEnv(gym.Env):
         """Create visualization frame."""
         # Get latest frame
         frame = self.last_four_frames[-1]
+        # Use nearest interpolation to reduce CPU cost
         vis_frame = cv2.cvtColor(
-            cv2.resize(frame, (VIS_SIZE, VIS_SIZE)), 
+            cv2.resize(frame, (VIS_SIZE, VIS_SIZE), interpolation=cv2.INTER_NEAREST),
             cv2.COLOR_GRAY2BGR
         )
         
@@ -366,8 +367,14 @@ class OsuManiaEnv(gym.Env):
     def _maintain_fps(self, step_start: float) -> None:
         """Maintain target FPS."""
         elapsed = time.time() - step_start
-        if elapsed < FRAME_DELAY:
-            time.sleep(FRAME_DELAY - elapsed)
+        remaining = FRAME_DELAY - elapsed
+        if remaining > 0:
+            # Use shorter sleeps in a loop to be more precise
+            if remaining > 0.003:
+                time.sleep(remaining - 0.001)
+            # busy-wait the final ~1ms to avoid oversleep
+            while (time.time() - step_start) < FRAME_DELAY:
+                pass
     
     def _prepare_info(self) -> Dict[str, Any]:
         """Prepare info dictionary."""
@@ -378,6 +385,7 @@ class OsuManiaEnv(gym.Env):
             'game_state': self.current_game_state.game_state,
             'step_count': self.step_count,
             'reward_stats': self.reward_calculator.get_reward_stats(),
+            'fps_stats': self.frame_processor.get_stats(),
             **self.current_game_state.hits
         }
         # Attach song finished notification if detected

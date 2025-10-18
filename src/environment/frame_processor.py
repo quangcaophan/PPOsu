@@ -82,8 +82,9 @@ class FrameProcessor:
     
     def get_stats(self) -> Dict[str, Any]:
         """Get frame processing statistics."""
+        # frame_intervals are stored in seconds
         avg_interval = np.mean(self.frame_intervals) if self.frame_intervals else 0
-        current_fps = 1.0 / avg_interval if avg_interval > 0 else 0
+        current_fps = (1.0 / avg_interval) if avg_interval > 0 else 0
         
         return {
             "capture_count": self.capture_count,
@@ -123,16 +124,19 @@ class FrameProcessor:
 
                         # Update statistics
                         self.capture_count += 1
-                        interval = (time.time() - prev_time) * 1000
+                        interval = (time.time() - prev_time)
                         self.frame_intervals.append(interval)
                         prev_time = time.time()
                         self.last_capture_time = time.time()
 
-                        # Maintain target FPS
+                        # Maintain target FPS using precise sleep
                         next_frame_time += self.frame_interval
                         delay = next_frame_time - time.time()
                         if delay > 0:
-                            time.sleep(delay)
+                            if delay > 0.003:
+                                time.sleep(delay - 0.001)
+                            while (next_frame_time - time.time()) > 0:
+                                pass
 
                     except Exception as e:
                         self.error_count += 1
