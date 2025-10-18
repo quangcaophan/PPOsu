@@ -58,7 +58,9 @@ class SongFinishedEvalCallback(EvalCallback):
         if self.locals["dones"][0]:
             info = self.locals["infos"][0]
             
-            if info.get("game_state") == 7:  # Song finished
+            # Prefer explicit flag from the environment; fallback to results screen
+            song_finished = bool(info.get("song_finished")) or info.get("game_state") == 7
+            if song_finished:
                 self.songs_since_last_eval += 1
                 self.total_songs_completed += 1
                 

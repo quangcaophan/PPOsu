@@ -14,8 +14,9 @@ import threading
 from queue import Queue, Empty
 
 from .constants import (
-    KEY_MAPPINGS, FRAME_SIZE, VISUALIZATION_SIZE, FRAME_DELAY, 
-    VIS_SIZE, GAME_STATE_PLAYING, NO_DATA_THRESHOLD
+    KEY_MAPPINGS, FRAME_SIZE, VISUALIZATION_SIZE, FRAME_DELAY,
+    VIS_SIZE, GAME_STATE_PLAYING, GAME_STATE_RESULTS, GAME_STATE_MENU,
+    NO_DATA_THRESHOLD, NOT_PLAYING_TERMINATION_STEPS
 )
 from .frame_processor import FrameProcessor
 from .reward_calculator import RewardCalculator, GameState
@@ -93,12 +94,17 @@ class OsuManiaEnv(gym.Env):
         self.previous_keys_state = [False] * self.num_keys
         self.step_count = 0
         self.no_data_steps = 0
+        self.not_playing_steps = 0
         self.user_quit = False
         # Signal that an external evaluation just completed; consumed via info once
         self._eval_completed_signal = False
+        # One-time signals for callbacks/info
+        self._song_finished_signal = False
+        self._pending_truncation_reason: Optional[str] = None
         
         # Game state
         self.current_game_state = GameState()
+        self._previous_game_state: Optional[int] = None
         
         # Start frame processing
         self.frame_processor.start()
@@ -141,7 +147,7 @@ class OsuManiaEnv(gym.Env):
         
         # Check termination
         terminated = self._is_episode_ended()
-        truncated = self.step_count >= self.config.max_steps
+        truncated = (self.step_count >= self.config.max_steps) or self._should_truncate()
         
         # Visualization
         if self.show_window:
@@ -256,6 +262,8 @@ class OsuManiaEnv(gym.Env):
                 self.no_data_steps = 0
             
             # Update current game state
+            prev_state = self.current_game_state.game_state
+            self._previous_game_state = prev_state
             self.current_game_state.game_state = game_data.get('game_state', 0)
             self.current_game_state.score = game_data.get('score', 0)
             self.current_game_state.combo = game_data.get('combo', 0)
@@ -267,19 +275,41 @@ class OsuManiaEnv(gym.Env):
                 if k.startswith('hit') or k == 'miss'
             }
             
-            # Auto-reset if no data for too long
-            if self.no_data_steps > NO_DATA_THRESHOLD:
-                self.logger.error("Auto-resetting due to memory reader failures")
-                self.reset()
-                self.no_data_steps = 0
+            # Detect song finished transition (playing -> results)
+            if (
+                prev_state == GAME_STATE_PLAYING and 
+                self.current_game_state.game_state == GAME_STATE_RESULTS
+            ):
+                self._song_finished_signal = True
+
+            # Track consecutive not-playing frames
+            if self.current_game_state.game_state == GAME_STATE_PLAYING:
+                self.not_playing_steps = 0
+            else:
+                self.not_playing_steps += 1
+
+            # Mark truncation on prolonged data loss (handled by step)
+            if self.no_data_steps > NO_DATA_THRESHOLD and self._pending_truncation_reason is None:
+                self._pending_truncation_reason = "no_data_timeout"
+                # Do not call reset() here; let the outer loop handle it
                 
         except Exception as e:
             self.logger.error(f"Game state update error: {e}")
     
     def _is_episode_ended(self) -> bool:
-        """Check if episode should end."""
-        return (self.current_game_state.game_state != GAME_STATE_PLAYING or 
-                self.user_quit)
+        """Check if episode should end.
+
+        We only terminate after a stable period of not being in PLAYING
+        to avoid spurious terminations when the game briefly leaves PLAYING.
+        """
+        return (
+            self.not_playing_steps >= NOT_PLAYING_TERMINATION_STEPS or
+            self.user_quit
+        )
+
+    def _should_truncate(self) -> bool:
+        """Check whether the episode should be truncated (timeout/technical)."""
+        return self._pending_truncation_reason is not None
     
     def _check_user_quit(self) -> bool:
         """Check if user wants to quit."""
@@ -350,6 +380,15 @@ class OsuManiaEnv(gym.Env):
             'reward_stats': self.reward_calculator.get_reward_stats(),
             **self.current_game_state.hits
         }
+        # Attach song finished notification if detected
+        if self._song_finished_signal:
+            info['song_finished'] = True
+            self._song_finished_signal = False
+        # Attach truncation reason if any
+        if self._pending_truncation_reason is not None:
+            info['truncation_reason'] = self._pending_truncation_reason
+            # Clear after surfacing once
+            self._pending_truncation_reason = None
         # Attach one-time evaluation completion signal if set
         if self._eval_completed_signal:
             info['eval_completed'] = True
@@ -374,9 +413,12 @@ class OsuManiaEnv(gym.Env):
         self.user_quit = False
         self.step_count = 0
         self.no_data_steps = 0
+        self.not_playing_steps = 0
         self.previous_keys_state = [False] * self.num_keys
         self.current_game_state = GameState()
         self.reward_calculator.reset()
+        self._song_finished_signal = False
+        self._pending_truncation_reason = None
     
     def _handle_eval_restart(self) -> None:
         """Handle automatic restart for evaluation environment."""
