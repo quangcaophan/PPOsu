@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import torch
+import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
@@ -186,12 +187,29 @@ class PPOTrainer:
             )
             policy_to_use = "CnnPolicy"
 
+        # Auto-configure policy kwargs based on observation scaling
+        policy_kwargs: Dict[str, Any] = {}
+        obs_space = self.env.observation_space
+        if isinstance(obs_space, gym_spaces.Box) and len(obs_space.shape) == 3:
+            try:
+                max_high = float(np.max(obs_space.high))
+                min_low = float(np.min(obs_space.low))
+                is_float = np.issubdtype(obs_space.dtype, np.floating)
+                # If frames are already normalized to [0, 1] floats, disable image normalization
+                if is_float and min_low >= 0.0 and max_high <= 1.0:
+                    policy_kwargs["normalize_images"] = False
+                    self.logger.info("Detected normalized float image observations; setting normalize_images=False")
+            except Exception:
+                # Be conservative if any check fails
+                pass
+
         self.model = PPO(
             policy=policy_to_use,
             env=self.env,
             verbose=1,
             device=device,
             tensorboard_log=str(self.tensorboard_dir),
+            policy_kwargs=policy_kwargs if policy_kwargs else None,
             **ppo_params.__dict__
         )
         
