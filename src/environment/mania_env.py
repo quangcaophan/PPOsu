@@ -94,6 +94,8 @@ class OsuManiaEnv(gym.Env):
         self.step_count = 0
         self.no_data_steps = 0
         self.user_quit = False
+        # Signal that an external evaluation just completed; consumed via info once
+        self._eval_completed_signal = False
         
         # Game state
         self.current_game_state = GameState()
@@ -339,7 +341,7 @@ class OsuManiaEnv(gym.Env):
     
     def _prepare_info(self) -> Dict[str, Any]:
         """Prepare info dictionary."""
-        return {
+        info: Dict[str, Any] = {
             'combo': self.current_game_state.combo,
             'score': self.current_game_state.score,
             'accuracy': self.current_game_state.accuracy,
@@ -348,6 +350,16 @@ class OsuManiaEnv(gym.Env):
             'reward_stats': self.reward_calculator.get_reward_stats(),
             **self.current_game_state.hits
         }
+        # Attach one-time evaluation completion signal if set
+        if self._eval_completed_signal:
+            info['eval_completed'] = True
+            self._eval_completed_signal = False
+        return info
+
+    # External control hooks
+    def notify_evaluation_complete(self) -> None:
+        """Set a one-time signal indicating evaluation just finished."""
+        self._eval_completed_signal = True
     
     def _release_all_keys(self) -> None:
         """Release all keys."""
