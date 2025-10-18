@@ -1,16 +1,57 @@
-# Enhanced Osu! Mania RL Agent Requirements
-# Core RL and ML libraries
+# PPO Osu! Mania AI Agent - Complete Requirements
+# Refactored version with all dependencies
+
+# ==================== CORE RL AND ML LIBRARIES ====================
 stable-baselines3[extra]==2.1.0
 torch>=2.0.0
 gymnasium>=0.28.0
 
-# Computer Vision and Screen Capture
+# ==================== COMPUTER VISION AND SCREEN CAPTURE ====================
 opencv-python>=4.8.0
 mss>=9.0.1
 numpy>=1.24.0
 
-# Input Simulation
+# ==================== INPUT SIMULATION ====================
 pydirectinput>=1.0.4
 
-# Logging and Monitoring
+# ==================== LOGGING AND MONITORING ====================
 tensorboard>=2.13.0
+
+# ==================== SYSTEM MONITORING ====================
+psutil>=5.9.0
+
+# ==================== HTTP REQUESTS ====================
+requests>=2.28.0
+
+# ==================== DATA STRUCTURES AND UTILITIES ====================
+# These are usually included with Python, but listing for completeness
+# dataclasses (Python 3.7+)
+# pathlib (Python 3.4+)
+# typing (Python 3.5+)
+# collections (built-in)
+# threading (built-in)
+# queue (built-in)
+# json (built-in)
+# os (built-in)
+# sys (built-in)
+# time (built-in)
+# signal (built-in)
+# argparse (built-in)
+# logging (built-in)
+
+# ==================== DEVELOPMENT AND TESTING (OPTIONAL) ====================
+# pytest>=7.0.0
+# pytest-cov>=4.0.0
+# mypy>=1.0.0
+# black>=23.0.0
+# flake8>=6.0.0
+
+# ==================== INSTALLATION NOTES ====================
+# Install with: pip install -r requirements.txt
+# 
+# For GPU support (optional):
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# For development:
+# pip install -r requirements.txt
+# pip install pytest pytest-cov mypy black flake8

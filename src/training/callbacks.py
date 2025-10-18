@@ -1,0 +1,306 @@
+"""
+Custom callbacks for PPO training.
+"""
+
+import os
+import time
+import numpy as np
+from typing import Dict, Any, Optional
+from stable_baselines3.common.callbacks import EvalCallback, BaseCallback
+# Note: stable_baselines3.common.schedules doesn't exist in current version
+# We'll implement learning rate scheduling manually
+
+from ..core.logger import get_logger
+
+
+class SongFinishedEvalCallback(EvalCallback):
+    """
+    Evaluation callback with cooldown to prevent too frequent evaluations.
+    Only evaluates after songs are completed.
+    """
+    
+    def __init__(
+        self, 
+        eval_env, 
+        best_model_save_path: Optional[str] = None,
+        n_eval_episodes: int = 2,
+        min_songs_between_eval: int = 3,
+        verbose: int = 1,
+        **kwargs
+    ):
+        """
+        Initialize song-finished evaluation callback.
+        
+        Args:
+            eval_env: Evaluation environment
+            best_model_save_path: Path to save best model
+            n_eval_episodes: Number of episodes to evaluate
+            min_songs_between_eval: Minimum songs between evaluations
+            verbose: Verbosity level
+        """
+        super().__init__(
+            eval_env=eval_env,
+            best_model_save_path=best_model_save_path,
+            n_eval_episodes=n_eval_episodes,
+            eval_freq=1,  # Check every step
+            verbose=verbose,
+            **kwargs
+        )
+        
+        self.min_songs_between_eval = min_songs_between_eval
+        self.songs_since_last_eval = 0
+        self.total_songs_completed = 0
+        self.logger = get_logger("eval_callback")
+    
+    def _on_step(self) -> bool:
+        """Check if evaluation should be triggered."""
+        # Check if an episode has ended
+        if self.locals["dones"][0]:
+            info = self.locals["infos"][0]
+            
+            if info.get("game_state") == 7:  # Song finished
+                self.songs_since_last_eval += 1
+                self.total_songs_completed += 1
+                
+                # Only evaluate every N songs
+                if self.songs_since_last_eval >= self.min_songs_between_eval:
+                    if self.verbose > 0:
+                        self.logger.info(
+                            f"Song #{self.total_songs_completed} finished! "
+                            f"Triggering evaluation... (every {self.min_songs_between_eval} songs)"
+                        )
+                    
+                    # Reset counter
+                    self.songs_since_last_eval = 0
+                    
+                    # Run evaluation
+                    original_n_calls = self.n_calls
+                    self.n_calls = self.eval_freq
+                    continue_training = super()._on_step()
+                    
+                    if self.verbose > 0:
+                        self.logger.info("Evaluation complete! Resuming training.")
+                    
+                    self.n_calls = original_n_calls
+                    return continue_training
+                else:
+                    if self.verbose > 0:
+                        self.logger.info(
+                            f"Song #{self.total_songs_completed} finished. "
+                            f"Will evaluate in {self.min_songs_between_eval - self.songs_since_last_eval} more song(s)."
+                        )
+        
+        return True
+
+
+class CurriculumCallback(BaseCallback):
+    """
+    Gradually increase difficulty over time by adjusting reward parameters.
+    """
+    
+    def __init__(
+        self, 
+        env, 
+        initial_timesteps: int = 20000,
+        verbose: int = 0
+    ):
+        """
+        Initialize curriculum learning callback.
+        
+        Args:
+            env: Training environment
+            initial_timesteps: Timesteps before curriculum starts
+            verbose: Verbosity level
+        """
+        super().__init__(verbose)
+        self.env = env
+        self.initial_timesteps = initial_timesteps
+        self.logger = get_logger("curriculum_callback")
+    
+    def _on_step(self) -> bool:
+        """Update curriculum parameters."""
+        # After initial timesteps, gradually increase difficulty
+        if self.num_timesteps > self.initial_timesteps:
+            progress = min(
+                (self.num_timesteps - self.initial_timesteps) / 50000, 1.0
+            )
+            
+            # Gradually increase idle penalty
+            base_idle = -0.01
+            target_idle = -0.05
+            new_idle = base_idle + (target_idle - base_idle) * progress
+            
+            # Update environment reward parameters
+            if hasattr(self.env, 'reward_calculator'):
+                self.env.reward_calculator.reward_params.idle_penalty = new_idle
+            
+            if self.verbose > 0 and self.num_timesteps % 5000 == 0:
+                self.logger.info(
+                    f"Curriculum Progress: {progress*100:.1f}% - "
+                    f"Idle Penalty: {new_idle:.3f}"
+                )
+        
+        return True
+
+
+class BehaviorMonitorCallback(BaseCallback):
+    """
+    Monitor agent's action distribution during training.
+    """
+    
+    def __init__(
+        self, 
+        check_freq: int = 2000,
+        verbose: int = 0
+    ):
+        """
+        Initialize behavior monitoring callback.
+        
+        Args:
+            check_freq: Frequency to check behavior
+            verbose: Verbosity level
+        """
+        super().__init__(verbose)
+        self.check_freq = check_freq
+        self.action_counts = {}
+        self.logger = get_logger("behavior_monitor")
+    
+    def _on_step(self) -> bool:
+        """Monitor action distribution."""
+        action = self.locals.get('actions', [None])[0]
+        if action is not None:
+            self.action_counts[action] = self.action_counts.get(action, 0) + 1
+        
+        if self.n_calls % self.check_freq == 0:
+            total = sum(self.action_counts.values())
+            if total > 0:
+                self.logger.info(f"Action Distribution (last {self.check_freq} steps):")
+                
+                # Count "no action" (action 0)
+                no_action_pct = (self.action_counts.get(0, 0) / total) * 100
+                self.logger.info(f"  No Action: {no_action_pct:.1f}%")
+                
+                # Count actions with keys pressed
+                action_pct = ((total - self.action_counts.get(0, 0)) / total) * 100
+                self.logger.info(f"  With Keys: {action_pct:.1f}%")
+                
+                if no_action_pct > 80:
+                    self.logger.warning(
+                        "Agent is too passive! Consider adjusting rewards."
+                    )
+            
+            self.action_counts.clear()
+        
+        return True
+
+
+class LearningRateScheduler(BaseCallback):
+    """
+    Schedule learning rate during training.
+    """
+    
+    def __init__(
+        self,
+        initial_lr: float = 0.0003,
+        final_lr: float = 0.00001,
+        verbose: int = 0
+    ):
+        """
+        Initialize learning rate scheduler.
+        
+        Args:
+            initial_lr: Initial learning rate
+            final_lr: Final learning rate
+            verbose: Verbosity level
+        """
+        super().__init__(verbose)
+        self.initial_lr = initial_lr
+        self.final_lr = final_lr
+        self.logger = get_logger("lr_scheduler")
+    
+    def _on_step(self) -> bool:
+        """Update learning rate."""
+        if hasattr(self.model, 'learning_rate'):
+            progress = self.num_timesteps / self.total_timesteps
+            new_lr = self.initial_lr + (self.final_lr - self.initial_lr) * progress
+            
+            # Update learning rate
+            if hasattr(self.model, 'policy'):
+                for param_group in self.model.policy.optimizer.param_groups:
+                    param_group['lr'] = new_lr
+            
+            if self.verbose > 0 and self.num_timesteps % 10000 == 0:
+                self.logger.info(f"Learning rate: {new_lr:.6f}")
+        
+        return True
+
+
+class PerformanceMonitorCallback(BaseCallback):
+    """
+    Monitor training performance and log statistics.
+    """
+    
+    def __init__(
+        self,
+        check_freq: int = 1000,
+        verbose: int = 0
+    ):
+        """
+        Initialize performance monitoring callback.
+        
+        Args:
+            check_freq: Frequency to check performance
+            verbose: Verbosity level
+        """
+        super().__init__(verbose)
+        self.check_freq = check_freq
+        self.logger = get_logger("performance_monitor")
+        self.reward_history = []
+        self.episode_lengths = []
+    
+    def _on_step(self) -> bool:
+        """Monitor performance metrics."""
+        # Collect reward data
+        if 'rewards' in self.locals:
+            self.reward_history.extend(self.locals['rewards'])
+        
+        # Collect episode length data
+        if 'infos' in self.locals:
+            for info in self.locals['infos']:
+                if 'episode' in info:
+                    self.episode_lengths.append(info['episode']['l'])
+        
+        if self.n_calls % self.check_freq == 0:
+            self._log_performance_stats()
+        
+        return True
+    
+    def _log_performance_stats(self):
+        """Log performance statistics."""
+        if not self.reward_history:
+            return
+        
+        recent_rewards = self.reward_history[-1000:]  # Last 1000 rewards
+        
+        stats = {
+            "avg_reward": np.mean(recent_rewards),
+            "std_reward": np.std(recent_rewards),
+            "min_reward": np.min(recent_rewards),
+            "max_reward": np.max(recent_rewards),
+            "total_rewards": len(self.reward_history)
+        }
+        
+        if self.episode_lengths:
+            recent_lengths = self.episode_lengths[-100:]  # Last 100 episodes
+            stats.update({
+                "avg_episode_length": np.mean(recent_lengths),
+                "total_episodes": len(self.episode_lengths)
+            })
+        
+        self.logger.info(f"Performance Stats: {stats}")
+        
+        # Keep history manageable
+        if len(self.reward_history) > 10000:
+            self.reward_history = self.reward_history[-5000:]
+        if len(self.episode_lengths) > 1000:
+            self.episode_lengths = self.episode_lengths[-500:]

@@ -1,76 +1,305 @@
-# High-Performance osu!mania PPO Agent with Direct Memory Access
+# PPO Osu! Mania AI Agent - Refactored Version
 
-This project implements an AI agent designed to master the rhythm game osu!mania. It utilizes a Proximal Policy Optimization (PPO) algorithm for learning. The key architectural feature is its high-performance data pipeline, which reads the game state (combo, score, accuracy) directly from memory using **gosumemory**. This approach bypasses the significant performance bottlenecks of traditional screen-scraping or OCR techniques, enabling highly efficient, high-framerate training.
+A clean, modular, and scalable reinforcement learning agent for playing osu!mania using the PPO algorithm.
 
-## 🌟 Key Features
+## 🏗️ **New Architecture**
 
--   **Advanced PPO Agent**: Leverages the robust Proximal Policy Optimization (PPO) algorithm from `stable-baselines3`, known for its sample efficiency and stability in complex control tasks. This ensures steady, incremental learning without catastrophic forgetting.
-
--   **High-Speed Memory Reading**: Integrates with gosumemory to achieve near-instantaneous (<1ms) updates on the game state. This low-latency feedback is critical for accurate reward calculation and allows the agent to develop precise timing.
-
--   **Optimized Training Pipeline**: The entire environment and data processing pipeline are engineered for high throughput. This allows for high FPS training sessions, which accelerates the learning process and improves the agent's rhythmic accuracy.
-
--   **Live Gameplay Visualization**: A real-time window displays the agent's visual input, its currently selected actions, and key game metrics. This provides valuable insight into the agent's decision-making process as it learns.
-
--   **GPU Acceleration**: Utilizes PyTorch and a CUDA-enabled GPU for all neural network computations, significantly speeding up model inference and training steps.
-
--   **Robust Training Framework**: Features automatic model checkpointing to safeguard training progress and full TensorBoard integration for comprehensive monitoring of rewards, loss, and other learning metrics.
-
-## 💥 Performance Analysis: The Advantage of Memory Reading over OCR
-
-The performance of a reinforcement learning agent is directly tied to the speed and quality of its feedback loop.
-
-### The Inefficiency of OCR
-Initial prototypes for this project relied on Optical Character Recognition (OCR) to parse game state from the screen. This approach introduced a severe performance bottleneck. The OCR process competed with the agent's neural network for GPU resources, and the inherent latency of screen capture combined with text recognition (~300ms) resulted in an unacceptably low training rate of approximately 3 FPS. At this speed, the agent receives delayed and disjointed feedback, making it impossible to learn the precise timing required for a rhythm game.
-
-### The Solution: Direct Memory Access
-To resolve this critical issue, the architecture was redesigned to read game state directly from the application's memory via gosumemory. This change completely eliminated the OCR bottleneck. The program's speed is now primarily limited by the highly optimized screen capture and model inference times. The result is a smooth, efficient, and high-FPS training loop that provides the agent with the immediate feedback necessary for effective learning.
-
-## 🔧 How It Works: The Reinforcement Learning Loop
-
-The agent operates on a continuous perception-action-reward cycle. Each step in this loop is designed for maximum efficiency to facilitate rapid learning.
-
-```mermaid
-graph TD
-    subgraph Phase_1_Perception_and_State_Representation
-        A[Capture Frame of osu mania Play Area] --> B[Preprocess Frame - Grayscale and Resize]
-        B --> C[Maintain Stack of 4 Most Recent Frames]
-        C --> D[Current State S Observation is the 4 Frame Stack]
-    end
-
-    subgraph Phase_2_Policy_and_Value_Estimation
-        D --> E[Feed State S into Shared CNN Backbone]
-        E --> F[Actor Head - Outputs Policy A given S]
-        E --> G[Critic Head - Outputs Value of S]
-    end
-
-    subgraph Phase_3_Action_and_Environment_Interaction
-        F --> H[Sample Action A from Policy]
-        H --> I[Send Key Press or Release Commands to Game]
-        I --> J[Query gosumemory Local Server via HTTP or WebSocket]
-        J --> K[Receive New Game State S Prime with Combo Score Accuracy]
-    end
-
-    subgraph Phase_4_Reward_Calculation_and_Learning
-        K --> L[Calculate Reward R based on Change in Game State]
-        L --> M[Store Transition S A R S Prime in Rollout Buffer]
-        M -- Buffer Full --> N[Calculate Advantage Estimates using GAE]
-        N --> O[Update Actor and Critic Networks using PPO Clip Objective]
-        O --> A
-    end
+### **Clean Separation of Concerns**
+```
+src/
+├── core/           # Core utilities (config, logging)
+│   ├── config_manager.py
+│   └── logger.py
+├── environment/    # Environment modules
+│   ├── mania_env.py
+│   ├── frame_processor.py
+│   ├── reward_calculator.py
+│   └── constants.py
+├── training/       # Training modules
+│   ├── trainer.py
+│   └── callbacks.py
+└── utils/          # Utility modules
+    ├── visualization.py
+    └── performance.py
 ```
 
-1.  **Visual Perception (Seeing the Game)**: The agent's process begins by capturing the visual state of the note highway. To perceive motion and velocity, it stacks the four most recent frames into a single tensor. This stack is fed into a Convolutional Neural Network (CNN), which acts as a powerful feature extractor, learning to identify notes, their positions, and their patterns of descent.
+## 🚀 **Quick Start**
 
-2.  **Decision Making (Action Selection)**: The features extracted by the CNN are passed to the PPO model, which consists of two sub-networks: an Actor and a Critic.
-    -   The **Actor** network is responsible for policy-making. It outputs a probability distribution over all possible actions (i.e., every combination of key presses).
-    -   The **Critic** network evaluates the current state, predicting the expected future reward from that state. This evaluation helps guide the Actor's learning process.
-    The agent then samples an action from the Actor's probability distribution to execute in the game.
+### **1. Migration (if upgrading from old version)**
+```bash
+python migrate_to_refactored.py
+```
 
-3.  **State Feedback (The Secret Sauce)**: Immediately after the action is executed, the agent queries gosumemory's local server. In under a millisecond, it retrieves the precise, up-to-date game state (combo, score, accuracy). This immediate, low-latency feedback is the core advantage of the memory-reading approach.
+### **2. Training**
+```bash
+# Train with 4K configuration
+python main.py --config mania_4k
 
-4.  **Learning and Policy Update (Reward/Punishment)**: The agent calculates a reward or penalty based on the change in the game state resulting from its action.
-    -   A combo increase yields a strong positive reward.
-    -   A combo break results in a significant penalty.
-    -   Minor rewards/penalties are given for score changes, key spamming, or inaction.
-    This reward signal is used to update the PPO model. The algorithm compares the actual reward received to the Critic's prediction. If the outcome was better than predicted, the policy is adjusted to make that action more likely in similar future states. If it was worse, the policy is adjusted to avoid it. This rapid, iterative loop allows the agent to efficiently learn and refine its gameplay strategy.
+# Train with custom timesteps
+python main.py --config mania_4k --timesteps 200000
+
+# Show evaluation window
+python main.py --config mania_4k --show-eval
+```
+
+### **3. Playing**
+```bash
+# Play with trained agent
+python play_agent_refactored.py --config mania_4k
+
+# Use specific model
+python play_agent_refactored.py --model models/mania/4k/best_model/best_model.zip
+```
+
+## 📋 **Key Improvements**
+
+### **1. Configuration Management**
+- **Type-safe**: Full dataclass-based configuration
+- **Validation**: Automatic config validation
+- **Flexible**: Easy to extend and modify
+
+```python
+from src.core.config_manager import ConfigManager
+
+config_manager = ConfigManager()
+config = config_manager.load_config("mania_4k")
+```
+
+### **2. Modular Environment**
+- **Frame Processing**: Separate `FrameProcessor` class
+- **Reward Calculation**: Dedicated `RewardCalculator` class
+- **Clean Interface**: Well-defined environment API
+
+### **3. Advanced Training System**
+- **Comprehensive Callbacks**: Multiple monitoring callbacks
+- **Error Handling**: Graceful error recovery
+- **Logging**: Structured logging throughout
+
+### **4. Better Performance**
+- **Optimized Frame Processing**: Background thread with queue
+- **Memory Management**: Efficient state tracking
+- **Performance Monitoring**: Real-time metrics
+
+## 🔧 **Configuration**
+
+### **Creating New Configurations**
+```python
+from src.core.config_manager import ConfigManager, AgentConfig
+
+# Create default config
+config_manager = ConfigManager()
+config = config_manager.create_default_config("mania", 4)
+
+# Customize parameters
+config.reward_params.hit_300_reward = 3.0
+config.training_params.ppo_params.learning_rate = 0.0001
+
+# Save configuration
+config_manager.save_config(config, "my_custom_config")
+```
+
+### **Configuration Structure**
+```python
+@dataclass
+class AgentConfig:
+    mode: str = "mania"
+    num_keys: int = 4
+    play_area: PlayArea
+    max_steps: int = 15000
+    reward_params: RewardParams
+    training_params: TrainingParams
+    timestamp: str = ""
+```
+
+## 📊 **Monitoring & Logging**
+
+### **Structured Logging**
+- **Multiple Levels**: DEBUG, INFO, WARNING, ERROR
+- **Colored Output**: Easy to read console output
+- **File Logging**: Automatic log rotation
+- **Performance Metrics**: Real-time monitoring
+
+### **TensorBoard Integration**
+```bash
+# View training progress
+tensorboard --logdir tensorboard_logs
+```
+
+### **Performance Monitoring**
+- **FPS Tracking**: Real-time frame rate monitoring
+- **Memory Usage**: System resource monitoring
+- **Reward Statistics**: Training progress tracking
+
+## 🎯 **Advanced Features**
+
+### **1. Curriculum Learning**
+Automatically increases difficulty over time:
+```python
+# Gradually increase idle penalty
+curriculum_callback = CurriculumCallback(env, initial_timesteps=20000)
+```
+
+### **2. Behavior Monitoring**
+Track agent action patterns:
+```python
+# Monitor action distribution
+behavior_callback = BehaviorMonitorCallback(check_freq=2000)
+```
+
+### **3. Learning Rate Scheduling**
+Dynamic learning rate adjustment:
+```python
+# Schedule learning rate decay
+lr_scheduler = LearningRateScheduler(initial_lr=0.0003, final_lr=0.00001)
+```
+
+### **4. Performance Monitoring**
+Comprehensive performance tracking:
+```python
+# Monitor system and training performance
+perf_monitor = PerformanceMonitorCallback(check_freq=1000)
+```
+
+## 🛠️ **Development**
+
+### **Adding New Features**
+
+#### **1. New Environment Component**
+```python
+# src/environment/my_component.py
+class MyComponent:
+    def __init__(self, config):
+        self.config = config
+    
+    def process(self, data):
+        # Your logic here
+        return processed_data
+```
+
+#### **2. New Training Callback**
+```python
+# src/training/my_callback.py
+class MyCallback(BaseCallback):
+    def _on_step(self) -> bool:
+        # Your callback logic
+        return True
+```
+
+#### **3. New Utility**
+```python
+# src/utils/my_utility.py
+class MyUtility:
+    def __init__(self):
+        self.logger = get_logger("my_utility")
+    
+    def do_something(self):
+        # Your utility logic
+        pass
+```
+
+### **Testing**
+```bash
+# Run specific tests
+python -m pytest tests/
+
+# Run with coverage
+python -m pytest --cov=src tests/
+```
+
+## 📈 **Performance Optimization**
+
+### **Frame Processing**
+- **Background Thread**: Non-blocking frame capture
+- **Queue Management**: Efficient frame buffering
+- **Memory Optimization**: Minimal memory footprint
+
+### **Training Efficiency**
+- **Batch Processing**: Optimized batch sizes
+- **Memory Management**: Efficient state tracking
+- **Checkpointing**: Regular model saving
+
+### **System Resources**
+- **CPU Usage**: Optimized processing
+- **Memory Usage**: Efficient data structures
+- **GPU Utilization**: CUDA optimization when available
+
+## 🔍 **Troubleshooting**
+
+### **Common Issues**
+
+#### **1. Configuration Not Found**
+```bash
+# List available configs
+python -c "from src.core.config_manager import ConfigManager; print(ConfigManager().list_configs())"
+```
+
+#### **2. Model Loading Error**
+```bash
+# Check model compatibility
+python -c "from stable_baselines3 import PPO; model = PPO.load('path/to/model.zip')"
+```
+
+#### **3. Environment Issues**
+```bash
+# Test environment
+python -c "from src.environment.mania_env import OsuManiaEnv; env = OsuManiaEnv(config)"
+```
+
+### **Debug Mode**
+```bash
+# Enable debug logging
+python main.py --config mania_4k --log-level DEBUG
+```
+
+## 📚 **API Reference**
+
+### **Core Classes**
+
+#### **ConfigManager**
+```python
+config_manager = ConfigManager(config_dir="config")
+config = config_manager.load_config("mania_4k")
+config_manager.save_config(config, "new_config")
+```
+
+#### **PPOTrainer**
+```python
+trainer = PPOTrainer("mania_4k", show_eval_window=True)
+trainer.run_training(total_timesteps=100000)
+```
+
+#### **OsuManiaEnv**
+```python
+env = OsuManiaEnv(config, show_window=True)
+obs, info = env.reset()
+obs, reward, done, truncated, info = env.step(action)
+```
+
+## 🤝 **Contributing**
+
+1. **Fork the repository**
+2. **Create a feature branch**
+3. **Follow the coding standards**
+4. **Add tests for new features**
+5. **Submit a pull request**
+
+### **Coding Standards**
+- **Type Hints**: All functions must have type hints
+- **Docstrings**: Comprehensive documentation
+- **Logging**: Use structured logging
+- **Error Handling**: Comprehensive error handling
+
+## 📄 **License**
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🙏 **Acknowledgments**
+
+- **Stable Baselines3**: PPO implementation
+- **OpenAI Gym**: Environment framework
+- **OpenCV**: Computer vision processing
+- **osu!**: The amazing rhythm game
+
+---
+
+**Happy Training! 🎵🤖**

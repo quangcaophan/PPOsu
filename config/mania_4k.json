@@ -2,30 +2,26 @@
     "mode": "mania",
     "num_keys": 4,
     "play_area": {
-        "top": 172,
-        "left": 728,
-        "width": 470,
-        "height": 716
+        "top": 176,
+        "left": 726,
+        "width": 467,
+        "height": 712
     },
     "max_steps": 15000,
     "reward_params": {
         "living_penalty": -0.001,
         "action_cost_penalty": -0.0005,
         "idle_penalty": -0.01,
-        
         "hit_geki_reward": 3.0,
         "hit_300_reward": 2.0,
         "hit_100_reward": 1.0,
         "hit_50_penalty": -0.1,
         "miss_penalty": -0.2,
-        
         "combo_break_penalty": -0.1,
         "combo_increase_reward": 0.05,
-        
         "combo_milestone_50": 5.0,
         "combo_milestone_100": 10.0,
         "combo_milestone_200": 20.0,
-        
         "accuracy_change_multiplier": 10.0
     },
     "training_params": {
@@ -49,5 +45,5 @@
             "min_songs_between_eval": 3
         }
     },
-    "timestamp": "2025-10-18 updated"
+    "timestamp": "2025-10-18 11:46:19"
 }
