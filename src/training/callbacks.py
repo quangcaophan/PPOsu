@@ -201,36 +201,77 @@ class LearningRateScheduler(BaseCallback):
     
     def __init__(
         self,
-        initial_lr: float = 0.0003,
-        final_lr: float = 0.00001,
+        initial_lr: Optional[float] = None,
+        final_lr: Optional[float] = None,
         verbose: int = 0
     ):
         """
         Initialize learning rate scheduler.
         
         Args:
-            initial_lr: Initial learning rate
-            final_lr: Final learning rate
+            initial_lr: Initial learning rate (defaults to optimizer LR at start)
+            final_lr: Final learning rate (defaults to initial_lr)
             verbose: Verbosity level
         """
         super().__init__(verbose)
         self.initial_lr = initial_lr
         self.final_lr = final_lr
+        self.total_timesteps: Optional[int] = None
         self.logger = get_logger("lr_scheduler")
+
+    def _on_training_start(self) -> None:
+        """Initialize scheduler parameters once training starts."""
+        # Determine total timesteps from the algorithm
+        self.total_timesteps = getattr(self.model, "_total_timesteps", None)
+        if self.total_timesteps is None or self.total_timesteps <= 0:
+            # Fallback to avoid division by zero
+            self.total_timesteps = 1
+
+        # Infer starting LR from optimizer if not provided
+        if hasattr(self.model, 'policy') and self.model.policy is not None:
+            try:
+                current_lr = self.model.policy.optimizer.param_groups[0]['lr']
+                if self.initial_lr is None:
+                    self.initial_lr = float(current_lr)
+                if self.final_lr is None:
+                    self.final_lr = float(current_lr)
+            except Exception:
+                # Use sane defaults if optimizer unavailable
+                if self.initial_lr is None:
+                    self.initial_lr = 3e-4
+                if self.final_lr is None:
+                    self.final_lr = self.initial_lr
+        else:
+            # No policy/optimizer yet
+            if self.initial_lr is None:
+                self.initial_lr = 3e-4
+            if self.final_lr is None:
+                self.final_lr = self.initial_lr
+
+        if self.verbose > 0:
+            self.logger.info(
+                f"LR schedule initialized: start={self.initial_lr:.6f}, end={self.final_lr:.6f}, total_timesteps={self.total_timesteps}"
+            )
     
     def _on_step(self) -> bool:
         """Update learning rate."""
-        if hasattr(self.model, 'learning_rate'):
-            progress = self.num_timesteps / self.total_timesteps
-            new_lr = self.initial_lr + (self.final_lr - self.initial_lr) * progress
-            
-            # Update learning rate
-            if hasattr(self.model, 'policy'):
-                for param_group in self.model.policy.optimizer.param_groups:
-                    param_group['lr'] = new_lr
-            
-            if self.verbose > 0 and self.num_timesteps % 10000 == 0:
-                self.logger.info(f"Learning rate: {new_lr:.6f}")
+        if not hasattr(self.model, 'policy') or self.model.policy is None:
+            return True
+
+        # Guard values
+        total = max(int(self.total_timesteps or 1), 1)
+        start_lr = float(self.initial_lr or 3e-4)
+        end_lr = float(self.final_lr or start_lr)
+
+        progress = min(self.num_timesteps / total, 1.0)
+        new_lr = start_lr + (end_lr - start_lr) * progress
+        
+        # Update learning rate
+        for param_group in self.model.policy.optimizer.param_groups:
+            param_group['lr'] = new_lr
+        
+        if self.verbose > 0 and self.num_timesteps % 10000 == 0:
+            self.logger.info(f"Learning rate: {new_lr:.6f}")
         
         return True
 
