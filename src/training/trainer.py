@@ -124,7 +124,7 @@ class PPOTrainer:
         # Training environment
         self.env = OsuManiaEnv(
             config=self.config,
-            show_window=True,
+            show_window=False,  # disable training window for performance
             run_id=f"{self.config.mode}_{self.config.num_keys}k",
             is_eval_env=False
         )
@@ -146,7 +146,7 @@ class PPOTrainer:
         if not self.config or not self.env:
             raise RuntimeError("Configuration and environment must be loaded first")
         
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda"
         self.logger.info(f"Using device: {device.upper()}")
         
         # Model path

@@ -54,11 +54,13 @@ DEFAULT_EVAL_FREQ = 5000
 DEFAULT_N_EVAL_EPISODES = 5
 DEFAULT_POLICY = "CnnPolicy"
 
-# Game state constants
-GAME_STATE_MENU = 0
+# Game state constants (aligned with gosumemory)
+# 5: menu, 2: gameplay, 7: results
+GAME_STATE_MENU = 5
 GAME_STATE_PLAYING = 2
-GAME_STATE_PAUSED = 7
+GAME_STATE_RESULTS = 7
 
 # Performance thresholds
-NO_DATA_THRESHOLD = 30  # ~0.5 seconds of no data
+NO_DATA_THRESHOLD = 30  # consecutive frames without data before truncation (~0.5s)
+NOT_PLAYING_TERMINATION_STEPS = 30  # consecutive not-playing frames before terminate (~0.5s)
 MAX_FRAME_QUEUE_SIZE = 2
