@@ -81,6 +81,34 @@ class SongFinishedEvalCallback(EvalCallback):
                     if self.verbose > 0:
                         self.logger.info("Evaluation complete! Resuming training.")
                     
+                    # Signal to the training environment(s) that evaluation has completed
+                    try:
+                        # If vectorized, broadcast to all; otherwise, call directly
+                        if hasattr(self.model, "get_env") and self.model.get_env() is not None:
+                            vec_env = self.model.get_env()
+                            # Try stable-baselines3 VecEnv API
+                            if hasattr(vec_env, "env_method"):
+                                vec_env.env_method("notify_evaluation_complete")
+                            elif hasattr(vec_env, "get_attr"):
+                                envs = vec_env.get_attr("envs", None)
+                                for env in envs or []:
+                                    if hasattr(env, "notify_evaluation_complete"):
+                                        env.notify_evaluation_complete()
+                        else:
+                            # Fallback: best-effort, no-op if unavailable
+                            pass
+                    except Exception as e:
+                        self.logger.error(f"Failed to send evaluation completion signal: {e}")
+                    
+                    # Restart a new beatmap in the evaluation environment
+                    try:
+                        if hasattr(self.eval_env, "reset"):
+                            self.eval_env.reset()
+                            if self.verbose > 0:
+                                self.logger.info("Evaluation env reset: started a new beatmap.")
+                    except Exception as e:
+                        self.logger.error(f"Failed to restart beatmap after evaluation: {e}")
+                    
                     self.n_calls = original_n_calls
                     return continue_training
                 else:
