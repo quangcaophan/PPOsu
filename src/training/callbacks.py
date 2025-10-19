@@ -152,22 +152,28 @@ class CurriculumCallback(BaseCallback):
         # After initial timesteps, gradually increase difficulty
         if self.num_timesteps > self.initial_timesteps:
             progress = min(
-                (self.num_timesteps - self.initial_timesteps) / 50000, 1.0
+                (self.num_timesteps - self.initial_timesteps) / 100000, 1.0
             )
             
             # Gradually increase idle penalty
-            base_idle = -0.01
-            target_idle = -0.05
+            base_idle = -0.002
+            target_idle = -0.01
             new_idle = base_idle + (target_idle - base_idle) * progress
+            
+            # Gradually increase miss penalty
+            base_miss = -0.5
+            target_miss = -2.0
+            new_miss = base_miss + (target_miss - base_miss) * progress
             
             # Update environment reward parameters
             if hasattr(self.env, 'reward_calculator'):
                 self.env.reward_calculator.reward_params.idle_penalty = new_idle
+                self.env.reward_calculator.reward_params.miss_penalty = new_miss
             
-            if self.verbose > 0 and self.num_timesteps % 5000 == 0:
+            if self.verbose > 0 and self.num_timesteps % 10000 == 0:
                 self.logger.info(
                     f"Curriculum Progress: {progress*100:.1f}% - "
-                    f"Idle Penalty: {new_idle:.3f}"
+                    f"Idle Penalty: {new_idle:.4f}, Miss Penalty: {new_miss:.2f}"
                 )
         
         return True
@@ -208,15 +214,29 @@ class BehaviorMonitorCallback(BaseCallback):
                 
                 # Count "no action" (action 0)
                 no_action_pct = (self.action_counts.get(0, 0) / total) * 100
-                self.logger.info(f"  No Action: {no_action_pct:.1f}%")
+                self.logger.info(f"  No Action (0): {no_action_pct:.1f}%")
                 
-                # Count actions with keys pressed
-                action_pct = ((total - self.action_counts.get(0, 0)) / total) * 100
-                self.logger.info(f"  With Keys: {action_pct:.1f}%")
+                # Count single key actions (1, 2, 4, 8)
+                single_key_count = sum(self.action_counts.get(i, 0) for i in [1, 2, 4, 8])
+                single_key_pct = (single_key_count / total) * 100
+                self.logger.info(f"  Single Keys: {single_key_pct:.1f}%")
                 
-                if no_action_pct > 80:
+                # Count multi-key actions
+                multi_key_count = total - self.action_counts.get(0, 0) - single_key_count
+                multi_key_pct = (multi_key_count / total) * 100
+                self.logger.info(f"  Multi Keys: {multi_key_pct:.1f}%")
+                
+                # Show top 5 most used actions
+                top_actions = sorted(self.action_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+                self.logger.info(f"  Top 5 actions: {[(a, f'{(c/total)*100:.1f}%') for a, c in top_actions]}")
+                
+                if no_action_pct > 85:
                     self.logger.warning(
-                        "Agent is too passive! Consider adjusting rewards."
+                        "⚠️ Agent is too passive! Consider increasing exploration."
+                    )
+                elif no_action_pct < 10:
+                    self.logger.warning(
+                        "⚠️ Agent is too active! May be spamming keys."
                     )
             
             self.action_counts.clear()

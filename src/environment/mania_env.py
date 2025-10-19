@@ -124,11 +124,20 @@ class OsuManiaEnv(gym.Env):
         step_start = time.time()
         self.step_count += 1
         
+        # Get game state first (to check if we should execute action)
+        self._update_game_state()
+        
         # Convert action to key states
         action_combo = [bool((action >> i) & 1) for i in range(self.num_keys)]
         
-        # Execute action
-        self._execute_action(action_combo)
+        # Only execute action if in PLAYING state (game_state = 2)
+        if self.current_game_state.game_state == GAME_STATE_PLAYING:
+            self._execute_action(action_combo)
+        else:
+            # If not playing, force release all keys and treat as no action
+            self._release_all_keys()
+            action_combo = [False] * self.num_keys
+            action = 0  # Override to no action
         
         # Wait for frame update (smaller sleep to reduce overhead; FPS enforced later)
         time.sleep(FRAME_DELAY * 0.5)
@@ -136,9 +145,6 @@ class OsuManiaEnv(gym.Env):
         # Get new frame
         new_frame = self._get_latest_frame()
         self._update_frame_buffer(new_frame)
-        
-        # Get game state
-        self._update_game_state()
         
         # Calculate reward
         reward = self.reward_calculator.calculate_reward(
@@ -256,7 +262,7 @@ class OsuManiaEnv(gym.Env):
             game_data = self.memory_reader.get_game_state()
             
             if not game_data.get('fetch_successful', True):
-                self.logger.warning("Communication with gosumemory lost")
+                self.logger.warning("Communication with tosu lost")
                 self.no_data_steps += 1
             else:
                 self.no_data_steps = 0

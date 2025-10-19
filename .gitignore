@@ -4,6 +4,7 @@ logs/
 
 # Backups
 *backup_*
+README/
 
 # Models
 models/

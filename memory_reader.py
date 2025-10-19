@@ -6,7 +6,7 @@ from collections import deque
 class FastMemoryReader:
     """
     Non-blocking memory reader using background thread
-    - Background thread fetches from gosumemory continuously
+    - Background thread fetches from tosu continuously
     - Main thread gets cached data instantly (< 1ms)
     - No waiting for network requests
     """
@@ -46,12 +46,12 @@ class FastMemoryReader:
         }
     
     def _reader_loop(self):
-        """Background thread - continuously fetch from gosumemory"""
+        """Background thread - continuously fetch from tosu"""
         while self.running:
             try:
                 fetch_start = time.time()
                 
-                # Fetch from gosumemory
+                # Fetch from tosu
                 resp = requests.get(self.url, timeout=0.05)  # Very short timeout
                 data = resp.json()
                 

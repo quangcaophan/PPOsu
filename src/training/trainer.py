@@ -26,6 +26,7 @@ from .callbacks import (
     LearningRateScheduler,
     PerformanceMonitorCallback
 )
+from .auto_beatmap_selector import SimpleRandomSelector
 
 
 class PPOTrainer:
@@ -44,7 +45,8 @@ class PPOTrainer:
         self,
         config_name: str,
         config_dir: str = "config",
-        show_eval_window: bool = False
+        show_eval_window: bool = False,
+        auto_select_songs: bool = False
     ):
         """
         Initialize PPO trainer.
@@ -53,10 +55,12 @@ class PPOTrainer:
             config_name: Name of configuration file (without .json)
             config_dir: Directory containing config files
             show_eval_window: Whether to show evaluation window
+            auto_select_songs: Whether to automatically select random songs
         """
         self.config_name = config_name
         self.config_dir = config_dir
         self.show_eval_window = show_eval_window
+        self.auto_select_songs = auto_select_songs
         
         # Initialize components
         self.config_manager = ConfigManager(config_dir)
@@ -261,6 +265,13 @@ class PPOTrainer:
         self.callbacks.append(
             PerformanceMonitorCallback(check_freq=1000, verbose=1)
         )
+        
+        # 7. Auto beatmap selector (if enabled)
+        if self.auto_select_songs:
+            self.callbacks.append(
+                SimpleRandomSelector(songs_per_change=1, verbose=1)
+            )
+            self.logger.info("Auto song selection enabled!")
         
         self.logger.info(f"Setup {len(self.callbacks)} callbacks")
     

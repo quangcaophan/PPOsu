@@ -43,6 +43,11 @@ def main():
         default="config", 
         help="Configuration directory"
     )
+    parser.add_argument(
+        "--auto-select-songs",
+        action="store_true",
+        help="Automatically select random songs during training"
+    )
     
     args = parser.parse_args()
     
@@ -61,7 +66,8 @@ def main():
         trainer = PPOTrainer(
             config_name=args.config,
             config_dir=args.config_dir,
-            show_eval_window=args.show_eval
+            show_eval_window=args.show_eval,
+            auto_select_songs=args.auto_select_songs
         )
         
         # Run training

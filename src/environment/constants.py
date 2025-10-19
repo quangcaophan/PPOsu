@@ -54,7 +54,7 @@ DEFAULT_EVAL_FREQ = 5000
 DEFAULT_N_EVAL_EPISODES = 5
 DEFAULT_POLICY = "CnnPolicy"
 
-# Game state constants (aligned with gosumemory)
+# Game state constants (aligned with tosu)
 # 5: menu, 2: gameplay, 7: results
 GAME_STATE_MENU = 5
 GAME_STATE_PLAYING = 2

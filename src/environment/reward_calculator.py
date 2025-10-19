@@ -69,16 +69,24 @@ class RewardCalculator:
         self.previous_state = self.current_state
         self.current_state = current_state
         
-        # Calculate base reward
-        reward = self._calculate_base_reward(num_keys_pressed)
-        
-        # Add gameplay rewards if playing
-        if current_state.game_state == 2:  # Playing state
+        # Only calculate gameplay rewards if playing (game_state = 2)
+        if current_state.game_state == 2:  # PLAYING state
+            # Calculate base reward
+            reward = self._calculate_base_reward(num_keys_pressed)
+            
+            # Add gameplay rewards
             reward += self._calculate_hit_rewards()
             reward += self._calculate_combo_rewards()
             reward += self._calculate_accuracy_rewards()
             reward += self._calculate_exploration_bonus(num_keys_pressed)
             reward += self._calculate_idle_penalty(num_keys_pressed)
+        
+        else:  # Not playing (menu, results, etc.)
+            # Small penalty if trying to press keys when not playing
+            if num_keys_pressed > 0:
+                reward = -0.01  # Small penalty for pressing keys outside gameplay
+            else:
+                reward = 0.0  # Neutral if not pressing anything
         
         # Track total reward
         self.total_reward += reward
@@ -172,17 +180,22 @@ class RewardCalculator:
     def _calculate_exploration_bonus(self, num_keys_pressed: int) -> float:
         """Calculate exploration bonus to encourage trying actions."""
         if num_keys_pressed > 0 and self.current_state.combo < 20:
-            return 0.01  # Small bonus for trying actions early
+            return 0.02  # Increased bonus for trying actions early
+        # Also reward multi-key presses early on to encourage learning patterns
+        if num_keys_pressed > 1 and self.current_state.combo < 50:
+            return 0.01 * num_keys_pressed  # Scale with number of keys
         return 0.0
     
     def _calculate_idle_penalty(self, num_keys_pressed: int) -> float:
         """Calculate idle penalty for not taking actions."""
         if num_keys_pressed == 0:
-            # Only penalize after learning basics
-            if self.current_state.combo > 10:
+            # Gradually increase idle penalty as agent learns
+            if self.current_state.combo > 50:
+                return self.reward_params.idle_penalty * 1.5  # Strong penalty when doing well
+            elif self.current_state.combo > 10:
                 return self.reward_params.idle_penalty
             else:
-                return self.reward_params.idle_penalty * 0.5  # Lighter penalty early
+                return self.reward_params.idle_penalty * 0.3  # Very light penalty early
         return 0.0
     
     def get_reward_stats(self) -> Dict[str, Any]:
