@@ -186,7 +186,7 @@ class PPOTrainer:
         requested_policy = self.config.training_params.policy
         policy_to_use = requested_policy
         if requested_policy == "MultiInputPolicy" and not isinstance(self.env.observation_space, gym_spaces.Dict):
-            self.logger.warning(
+            self.logger.warn(
                 "Requested MultiInputPolicy but observation_space is not Dict; falling back to CnnPolicy"
             )
             policy_to_use = "CnnPolicy"

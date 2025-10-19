@@ -262,7 +262,7 @@ class OsuManiaEnv(gym.Env):
             game_data = self.memory_reader.get_game_state()
             
             if not game_data.get('fetch_successful', True):
-                self.logger.warning("Communication with tosu lost")
+                self.logger.warn("Communication with tosu lost")
                 self.no_data_steps += 1
             else:
                 self.no_data_steps = 0
@@ -451,7 +451,7 @@ class OsuManiaEnv(gym.Env):
             if game_data.get('game_state') == GAME_STATE_PLAYING:
                 break
             
-            self.logger.warning(
+            self.logger.warn(
                 f"Retry {attempt+1}: Game state is {game_data.get('game_state')}, "
                 f"not {GAME_STATE_PLAYING} (Playing)"
             )
@@ -469,7 +469,7 @@ class OsuManiaEnv(gym.Env):
             waited += 0.5
         
         if self.current_game_state.game_state != GAME_STATE_PLAYING:
-            self.logger.warning(
+            self.logger.warn(
                 f"Game state is {self.current_game_state.game_state}, "
                 f"not {GAME_STATE_PLAYING} (Playing)"
             )

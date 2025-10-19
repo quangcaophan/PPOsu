@@ -231,11 +231,11 @@ class BehaviorMonitorCallback(BaseCallback):
                 self.logger.info(f"  Top 5 actions: {[(a, f'{(c/total)*100:.1f}%') for a, c in top_actions]}")
                 
                 if no_action_pct > 85:
-                    self.logger.warning(
+                    self.logger.warn(
                         "⚠️ Agent is too passive! Consider increasing exploration."
                     )
                 elif no_action_pct < 10:
-                    self.logger.warning(
+                    self.logger.warn(
                         "⚠️ Agent is too active! May be spamming keys."
                     )
             

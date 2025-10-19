@@ -54,7 +54,7 @@ class AutoBeatmapSelector(BaseCallback):
         self.available_beatmaps = self._scan_beatmaps()
         
         if not self.available_beatmaps:
-            self.logger.warning(f"No {key_mode}K beatmaps found in {beatmap_folder}")
+            self.logger.warn(f"No {key_mode}K beatmaps found in {beatmap_folder}")
         else:
             self.logger.info(
                 f"Found {len(self.available_beatmaps)} available {key_mode}K beatmaps "
@@ -231,9 +231,9 @@ class AutoBeatmapSelector(BaseCallback):
                                 f"(~{new_beatmap['stars']:.1f}★)"
                             )
                         else:
-                            self.logger.warning("Failed to change beatmap, will retry next song")
+                            self.logger.warn("Failed to change beatmap, will retry next song")
                     else:
-                        self.logger.warning("No suitable beatmaps available")
+                        self.logger.warn("No suitable beatmaps available")
                     
                     # Wait a bit for osu! to load
                     time.sleep(3.0)
